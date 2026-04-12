@@ -35,9 +35,7 @@ query_app = typer.Typer(help="Query the local database.", no_args_is_help=True)
 app.add_typer(scrape_app, name="scrape")
 app.add_typer(query_app, name="query")
 
-_DB_OPTION = typer.Option(
-    "coffeedb.sqlite", "--db", help="Path to the SQLite database."
-)
+_DB_OPTION = typer.Option("coffee.db", "--db", help="Path to the SQLite database.")
 
 
 def _build_detail_fields(
