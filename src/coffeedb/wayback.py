@@ -2,6 +2,8 @@
 
 import time
 
+import httpx
+
 from coffeedb.client import build_client
 from coffeedb.constants import (
     DEFAULT_WAYBACK_DELAY_SECONDS,
