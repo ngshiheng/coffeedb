@@ -1,12 +1,40 @@
 """HTML scraping helpers for the live site and archived detail pages."""
 
+import os
 import re
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+import httpx
+from hishel import BaseFilter, FilterPolicy, Request, Response, SyncSqliteStorage
+from hishel.httpx import SyncCacheClient
 from parsel import Selector
 
-from coffeedb.constants import RANK_MAX, RANK_MIN, SCRAPER_HTTP_TIMEOUT_SECONDS
-from coffeedb.http_client import fetch_text
+from coffeedb.constants import (
+    CACHE_DIR_ENV_VAR,
+    DEFAULT_CACHE_DIR,
+    DEFAULT_USER_AGENT,
+    RANK_MAX,
+    RANK_MIN,
+    SCRAPER_HTTP_TIMEOUT_SECONDS,
+)
+
+
+class _GetMethodFilter(BaseFilter[Request]):
+    def needs_body(self) -> bool:
+        return False
+
+    def apply(self, item: Request, body: bytes | None) -> bool:
+        return item.method.upper() == "GET"
+
+
+class _SuccessResponseFilter(BaseFilter[Response]):
+    def needs_body(self) -> bool:
+        return False
+
+    def apply(self, item: Response, body: bytes | None) -> bool:
+        return 200 <= item.status_code < 300
+
 
 WHITESPACE_PATTERN = r"\s+"
 BACKGROUND_IMAGE_PATTERN = r"background-image\s*:\s*url\(([^)]+)\)"
@@ -55,9 +83,39 @@ EXCLUDED_WEBSITE_TOKENS = (
 EXCLUDED_INSTAGRAM_TOKENS = ("theworlds100bestcoffeeshops",)
 INSTAGRAM_DOMAIN_TOKEN = "instagram.com"
 
+DEFAULT_HEADERS = {"User-Agent": DEFAULT_USER_AGENT}
+
+_CACHE_DIR = Path(os.getenv(CACHE_DIR_ENV_VAR, DEFAULT_CACHE_DIR))
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_CACHE_STORAGE = SyncSqliteStorage(database_path=str(_CACHE_DIR / "hishel_cache.db"))
+_CACHE_POLICY = FilterPolicy(
+    request_filters=[_GetMethodFilter()],
+    response_filters=[_SuccessResponseFilter()],
+)
+
+
+def _build_client(use_cache: bool) -> httpx.Client:
+    if use_cache:
+        return SyncCacheClient(
+            storage=_CACHE_STORAGE,
+            policy=_CACHE_POLICY,
+            follow_redirects=True,
+            headers=DEFAULT_HEADERS,
+            timeout=SCRAPER_HTTP_TIMEOUT_SECONDS,
+        )
+
+    return httpx.Client(
+        follow_redirects=True,
+        headers=DEFAULT_HEADERS,
+        timeout=SCRAPER_HTTP_TIMEOUT_SECONDS,
+    )
+
 
 def _fetch(url: str, use_cache: bool = True) -> str:
-    return fetch_text(url, timeout=SCRAPER_HTTP_TIMEOUT_SECONDS, use_cache=use_cache)
+    with _build_client(use_cache=use_cache) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+        return resp.text
 
 
 def _first_non_empty(values: list[str]) -> str | None:

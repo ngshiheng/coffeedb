@@ -13,8 +13,6 @@ from coffeedb import db as database
 from coffeedb import scraper as scraper_module
 from coffeedb import wayback
 from coffeedb.constants import (
-    DEFAULT_HISTORICAL_LIMIT,
-    DEFAULT_WAYBACK_DELAY_SECONDS,
     LIST_URL,
     build_detail_url,
     build_wayback_url,
@@ -111,9 +109,9 @@ def scrape_live(
     """Scrape the current live site: list page + all 100 detail pages."""
     database.init_db(db)
     conn = database.get_conn(db)
+    use_cache = not fresh
 
     typer.echo(f"Scraping list: {LIST_URL}")
-    use_cache = not fresh
     shops = scraper_module.scrape_list(LIST_URL, use_cache=use_cache)
     if not shops:
         typer.echo("No shops found on list page. Aborting.", err=True)
@@ -159,49 +157,17 @@ def scrape_historical(
         "--fresh",
         help="Bypass HTTP cache and fetch fresh responses.",
     ),
-    delay: float = typer.Option(
-        DEFAULT_WAYBACK_DELAY_SECONDS,
-        "--delay",
-        help="Seconds between Wayback requests.",
-    ),
-    limit: int = typer.Option(
-        DEFAULT_HISTORICAL_LIMIT,
-        "--limit",
-        help="Max snapshots to process (0 = all).",
-    ),
-    timestamps: list[str] = typer.Option(
-        [],
-        "--timestamp",
-        help="Explicit Wayback timestamp(s) to process (YYYYMMDDhhmmss). Can be repeated.",
-    ),
-    debug: bool = typer.Option(
-        False,
-        "--debug",
-        help="Print per-snapshot diagnostics (fetch/parse/insert counters).",
-    ),
 ) -> None:
     """Scrape all Wayback Machine snapshots of the list page."""
     database.init_db(db)
     conn = database.get_conn(db)
     use_cache = not fresh
 
-    if timestamps:
-        snapshots = [
-            {
-                "timestamp": ts,
-                "snapshot_date": f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}",
-            }
-            for ts in timestamps
-        ]
-    else:
-        typer.echo("Querying Wayback CDX API...")
-        snapshots = wayback.get_snapshots(LIST_URL, use_cache=use_cache)
-        if not snapshots:
-            typer.echo("No Wayback snapshots found.", err=True)
-            raise typer.Exit(code=1)
-
-    if limit > 0:
-        snapshots = snapshots[:limit]
+    typer.echo("Querying Wayback CDX API...")
+    snapshots = wayback.get_snapshots(LIST_URL, use_cache=use_cache)
+    if not snapshots:
+        typer.echo("No Wayback snapshots found.", err=True)
+        raise typer.Exit(code=1)
 
     typer.echo(f"Found {len(snapshots)} snapshot(s) to process.")
 
@@ -209,26 +175,14 @@ def scrape_historical(
         for snap in progress:
             ts = snap["timestamp"]
             snap_date = snap["snapshot_date"]
-            if debug:
-                typer.echo(f"[historical] ts={ts} date={snap_date} start")
 
-            html = wayback.fetch_archived(
-                ts, LIST_URL, delay=delay, use_cache=use_cache
-            )
+            html = wayback.fetch_archived(ts, LIST_URL, use_cache=use_cache)
             if html is None:
-                if debug:
-                    typer.echo(f"[historical] ts={ts} list_fetch=none skip")
                 continue
-            if debug:
-                typer.echo(f"[historical] ts={ts} list_fetch=ok html_len={len(html)}")
 
             shops = scraper_module.scrape_list(LIST_URL, html=html)
             if not shops:
-                if debug:
-                    typer.echo(f"[historical] ts={ts} parsed_shops=0 skip")
                 continue
-            if debug:
-                typer.echo(f"[historical] ts={ts} parsed_shops={len(shops)}")
 
             snapshot_id = database.insert_snapshot(
                 conn,
@@ -236,10 +190,6 @@ def scrape_historical(
                 list_page_url=build_wayback_url(ts, LIST_URL),
                 wayback_timestamp=ts,
             )
-            if debug:
-                typer.echo(f"[historical] ts={ts} snapshot_id={snapshot_id}")
-
-            details_missing = 0
 
             for shop in shops:
                 slug = shop["slug"]
@@ -247,10 +197,9 @@ def scrape_historical(
                 archived_detail_url = build_wayback_url(ts, detail_url)
 
                 detail_html = wayback.fetch_archived(
-                    ts, detail_url, delay=delay, use_cache=use_cache
+                    ts, detail_url, use_cache=use_cache
                 )
                 if detail_html is None:
-                    details_missing += 1
                     detail_fields = _build_detail_fields(
                         None,
                         fallback_name=shop["name"],
@@ -281,11 +230,6 @@ def scrape_historical(
                     ranking_detail_url=archived_detail_url,
                     is_wayback=True,
                     detail_fields=detail_fields,
-                )
-
-            if debug:
-                typer.echo(
-                    f"[historical] ts={ts} rankings_saved={len(shops)} detail_missing={details_missing}"
                 )
 
     typer.echo("Done.")

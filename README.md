@@ -27,7 +27,7 @@ uv run coffeedb scrape live --db coffee.db
 ### Scrape historical snapshots from Wayback
 
 ```bash
-uv run coffeedb scrape historical --db coffee.db --limit 5
+uv run coffeedb scrape historical --db coffee.db
 ```
 
 ## CLI overview
@@ -52,11 +52,7 @@ Uses the Wayback CDX API to find archived list pages, then requests archived lis
 
 Useful options:
 
-- `--limit`: process only the first `N` snapshots
-- `--timestamp`: process specific Wayback timestamps
-- `--delay`: seconds to wait between Wayback requests
 - `--fresh`: bypass the local HTTP cache
-- `--debug`: print per-snapshot diagnostics
 
 ## Data sources and scraper assumptions
 
@@ -73,14 +69,13 @@ These heuristics are deliberate. The code prefers a few explicit parsing rules o
 
 HTTP requests go through a small on-disk cache backed by `hishel`.
 
-- Only `GET` requests are cached.
-- Only successful `2xx` responses are cached.
+- Responses are cached using an `always_cache` policy.
+- Successful `GET` responses are cached regardless of origin cache headers.
 - `--fresh` bypasses the cache for that command.
 
 Environment variables:
 
-- `COFFEEDB_CACHE_DIR`: override the cache directory. Default: `.cache/coffeedb/http`
-- `COFFEEDB_CACHE_DEBUG`: print cache hit/miss telemetry when set to `1`, `true`, `yes`, or `on`
+- `COFFEEDB_CACHE_DIR`: override the cache directory. Default: `.cache/`
 
 ## Project structure
 
@@ -89,7 +84,6 @@ src/coffeedb/
 	cli.py          Typer commands and scrape/query orchestration
 	constants.py    Shared URLs, timeouts, and helper URL builders
 	db.py           SQLite schema and persistence helpers
-	http_client.py  Cached HTTP client helpers
 	scraper.py      HTML parsing for list and detail pages
 	wayback.py      CDX lookup and archived page fetching
 ```
