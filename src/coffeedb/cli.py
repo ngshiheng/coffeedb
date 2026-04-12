@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import date
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 import typer
 
@@ -13,16 +13,14 @@ from coffeedb import db as database
 from coffeedb import scraper as scraper_module
 from coffeedb import wayback
 from coffeedb.constants import (
+    DEFAULT_HISTORICAL_LIMIT,
     DEFAULT_WAYBACK_DELAY_SECONDS,
     LIST_URL,
     build_detail_url,
     build_wayback_url,
 )
 
-DEFAULT_HISTORICAL_LIMIT = 0
-DEFAULT_TOP_RESULTS = 10
-TOP_COLUMN_WIDTHS = (5, 40, 25, 35)
-HISTORY_COLUMN_WIDTHS = (12, 10, 6, 35, 25)
+_DB_OPTION = typer.Option("coffee.db", "--db", help="Path to the SQLite database.")
 
 app = typer.Typer(
     name="coffeedb",
@@ -30,12 +28,9 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 scrape_app = typer.Typer(help="Scrape coffee shop data.", no_args_is_help=True)
-query_app = typer.Typer(help="Query the local database.", no_args_is_help=True)
+
 
 app.add_typer(scrape_app, name="scrape")
-app.add_typer(query_app, name="query")
-
-_DB_OPTION = typer.Option("coffee.db", "--db", help="Path to the SQLite database.")
 
 
 def _build_detail_fields(
@@ -96,21 +91,11 @@ def _save_shop_snapshot(
         )
 
 
-# ---------------------------------------------------------------------------
-# init
-# ---------------------------------------------------------------------------
-
-
 @app.command()
 def init(db: str = _DB_OPTION) -> None:
     """Create database tables (safe to re-run)."""
     database.init_db(db)
     typer.echo(f"Database initialised: {db}")
-
-
-# ---------------------------------------------------------------------------
-# scrape live
-# ---------------------------------------------------------------------------
 
 
 @scrape_app.command("live")
@@ -163,11 +148,6 @@ def scrape_live(
             )
 
     typer.echo(f"Done. {len(shops)} shops saved.")
-
-
-# ---------------------------------------------------------------------------
-# scrape historical
-# ---------------------------------------------------------------------------
 
 
 @scrape_app.command("historical")
@@ -310,124 +290,6 @@ def scrape_historical(
 
     typer.echo("Done.")
 
-
-# ---------------------------------------------------------------------------
-# query top
-# ---------------------------------------------------------------------------
-
-
-@query_app.command("top")
-def query_top(
-    db: str = _DB_OPTION,
-    snapshot_date: Optional[str] = typer.Option(
-        None, "--date", help="YYYY-MM-DD snapshot date (default: latest)."
-    ),
-    n: int = typer.Option(
-        DEFAULT_TOP_RESULTS,
-        "--n",
-        help="Number of results to show.",
-    ),
-) -> None:
-    """Show the top N ranked coffee shops for a snapshot."""
-    conn = database.get_conn(db)
-
-    if snapshot_date:
-        row = conn.execute(
-            "SELECT id, snapshot_date, wayback_timestamp FROM snapshots WHERE snapshot_date = ? ORDER BY id DESC LIMIT 1",
-            (snapshot_date,),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT id, snapshot_date, wayback_timestamp FROM snapshots ORDER BY snapshot_date DESC, id DESC LIMIT 1"
-        ).fetchone()
-
-    if row is None:
-        typer.echo("No snapshots found. Run `coffeedb scrape live` first.", err=True)
-        raise typer.Exit(code=1)
-
-    snapshot_id, snap_date = row["id"], row["snapshot_date"]
-    source = "wayback" if row["wayback_timestamp"] else "live"
-    typer.echo(f"Snapshot: {snap_date} (source={source}, id={snapshot_id})\n")
-
-    rows = database.get_shop_slug_rows_for_snapshot(
-        conn, snapshot_id=snapshot_id, limit=n
-    )
-
-    if not rows:
-        typer.echo("No rankings found for this snapshot.")
-        return
-
-    col_w = TOP_COLUMN_WIDTHS
-    header = f"{'Rank':<{col_w[0]}}  {'Name':<{col_w[1]}}  {'Country':<{col_w[2]}}  {'Slug':<{col_w[3]}}"
-    typer.echo(header)
-    typer.echo("-" * len(header))
-    for r in rows:
-        typer.echo(
-            f"{r['rank']:<{col_w[0]}}  {(r['name'] or ''):<{col_w[1]}}  {(r['country'] or ''):<{col_w[2]}}  {(r['slug'] or ''):<{col_w[3]}}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# query history
-# ---------------------------------------------------------------------------
-
-
-@query_app.command("history")
-def query_history(
-    slug: str = typer.Argument(..., help="Shop slug, e.g. onyx-coffee-lab"),
-    db: str = _DB_OPTION,
-) -> None:
-    """Show the ranking history of a coffee shop across all snapshots."""
-    conn = database.get_conn(db)
-
-    rows = conn.execute(
-        """
-        SELECT
-            s.snapshot_date,
-            CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'wayback' END AS source,
-            r.rank,
-            r.name_on_page,
-            r.country_on_page
-        FROM rankings r
-        JOIN shops sh ON sh.id = r.shop_id
-        JOIN snapshots s ON r.snapshot_id = s.id
-        WHERE sh.slug = ?
-        ORDER BY s.snapshot_date
-        """,
-        (slug,),
-    ).fetchall()
-
-    if not rows:
-        typer.echo(f"No ranking history found for slug: {slug}", err=True)
-        raise typer.Exit(code=1)
-
-    shop = conn.execute(
-        """
-        SELECT sd.name
-        FROM shops sh
-        LEFT JOIN shop_details sd ON sd.shop_id = sh.id
-        WHERE sh.slug = ?
-        ORDER BY sd.snapshot_id DESC
-        LIMIT 1
-        """,
-        (slug,),
-    ).fetchone()
-    name = shop["name"] if (shop and shop["name"]) else slug
-    typer.echo(f"Ranking history for: {name} ({slug})\n")
-
-    col_w = HISTORY_COLUMN_WIDTHS
-    header = f"{'Date':<{col_w[0]}}  {'Source':<{col_w[1]}}  {'Rank':<{col_w[2]}}  {'Name on page':<{col_w[3]}}  {'Country':<{col_w[4]}}"
-    typer.echo(header)
-    typer.echo("-" * len(header))
-    for r in rows:
-        typer.echo(
-            f"{r['snapshot_date']:<{col_w[0]}}  {r['source']:<{col_w[1]}}  {r['rank']:<{col_w[2]}}  {(r['name_on_page'] or ''):<{col_w[3]}}  {(r['country_on_page'] or ''):<{col_w[4]}}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     app()

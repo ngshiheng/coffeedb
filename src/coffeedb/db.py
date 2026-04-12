@@ -2,19 +2,6 @@
 
 import sqlite3
 
-FINAL_SCHEMA_TABLES = {"snapshots", "shops", "rankings", "shop_details"}
-RANKING_REQUIRED_COLUMNS = {"shop_id", "detail_page_url"}
-SNAPSHOT_REQUIRED_COLUMNS = {"list_page_url"}
-SHOP_REQUIRED_COLUMNS = {"id", "slug"}
-DETAIL_REQUIRED_COLUMNS = {"shop_id", "snapshot_id", "is_wayback"}
-LEGACY_TABLES_TO_DROP = (
-    "shop_details",
-    "rankings",
-    "shops",
-    "coffee_shops",
-    "snapshots",
-)
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,44 +65,6 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row["name"] for row in rows}
 
 
-def _is_final_schema(conn: sqlite3.Connection) -> bool:
-    """Return whether the current database already matches the expected schema."""
-    tables = {
-        row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
-    if not FINAL_SCHEMA_TABLES.issubset(tables):
-        return False
-
-    ranking_cols = _table_columns(conn, "rankings")
-    snapshot_cols = _table_columns(conn, "snapshots")
-    shops_cols = _table_columns(conn, "shops")
-    details_cols = _table_columns(conn, "shop_details")
-
-    return (
-        RANKING_REQUIRED_COLUMNS.issubset(ranking_cols)
-        and SNAPSHOT_REQUIRED_COLUMNS.issubset(snapshot_cols)
-        and SHOP_REQUIRED_COLUMNS.issubset(shops_cols)
-        and DETAIL_REQUIRED_COLUMNS.issubset(details_cols)
-    )
-
-
-def _reset_to_final_schema(conn: sqlite3.Connection) -> None:
-    """Drop old tables so the final schema can be recreated cleanly."""
-    drop_statements = "\n".join(
-        f"DROP TABLE IF EXISTS {table};" for table in LEGACY_TABLES_TO_DROP
-    )
-    conn.executescript(
-        f"""
-        PRAGMA foreign_keys = OFF;
-        {drop_statements}
-        PRAGMA foreign_keys = ON;
-        """
-    )
-
-
 def _commit_if_requested(conn: sqlite3.Connection, auto_commit: bool) -> None:
     if auto_commit:
         conn.commit()
@@ -123,8 +72,6 @@ def _commit_if_requested(conn: sqlite3.Connection, auto_commit: bool) -> None:
 
 def init_db(db_path: str) -> None:
     with get_conn(db_path) as conn:
-        if not _is_final_schema(conn):
-            _reset_to_final_schema(conn)
         conn.executescript(SCHEMA)
         detail_cols = _table_columns(conn, "shop_details")
         if "image_urls" not in detail_cols:
