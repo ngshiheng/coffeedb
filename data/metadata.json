@@ -1,0 +1,113 @@
+{
+    "title": "World's 100 Best Coffee Shops Database",
+    "description_html": "Explore a historical, snapshot-driven database of <a href=\"https://theworlds100bestcoffeeshops.com\">The World's 100 Best Coffee Shops</a> rankings — track rank changes, newcomers, dropouts, and consistent performers across editions.",
+    "source": "The World's 100 Best Coffee Shops",
+    "source_url": "https://theworlds100bestcoffeeshops.com",
+    "databases": {
+        "coffeedb": {
+            "queries": {
+                "shop_finder": {
+                    "title": "Shop Finder",
+                    "description": "Search coffee shops by name, city, or country. Shows each shop's rank in the latest snapshot along with location and contact details. Use '=' prefix in name for an exact match (e.g. =Blue Bottle Coffee). Default limit: 100.",
+                    "sql": "WITH latest AS (SELECT id FROM snapshots ORDER BY snapshot_date DESC LIMIT 1) SELECT r.rank, COALESCE(sd.name, r.name_on_page) AS name, sh.slug, COALESCE(sd.city, '') AS city, COALESCE(sd.country, r.country_on_page) AS country, sd.website, sd.instagram, sd.description FROM rankings r JOIN latest ON r.snapshot_id = latest.id JOIN shops sh ON r.shop_id = sh.id LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id WHERE (CASE WHEN :name IS NULL OR :name = '' THEN 1=1 WHEN SUBSTR(:name,1,1) = '=' THEN COALESCE(sd.name, r.name_on_page) = SUBSTR(:name,2) ELSE LOWER(COALESCE(sd.name, r.name_on_page)) LIKE LOWER('%' || :name || '%') END) AND (:city IS NULL OR :city = '' OR LOWER(COALESCE(sd.city,'')) LIKE LOWER('%' || :city || '%')) AND (:country IS NULL OR :country = '' OR LOWER(COALESCE(sd.country, r.country_on_page,'')) LIKE LOWER('%' || :country || '%')) ORDER BY r.rank ASC LIMIT COALESCE(NULLIF(:limit,''), 100)",
+                    "params": ["name", "city", "country", "limit"]
+                },
+                "rank_timeline": {
+                    "title": "Rank Timeline",
+                    "description": "Track a shop's rank across every historical snapshot. Filter by name (use '=' prefix for exact match) or by slug. Results ordered by name then most recent snapshot first. Default limit: 200.",
+                    "sql": "SELECT sn.snapshot_date, r.rank, COALESCE(sd.name, r.name_on_page) AS name, sh.slug, COALESCE(sd.country, r.country_on_page) AS country FROM rankings r JOIN snapshots sn ON r.snapshot_id = sn.id JOIN shops sh ON r.shop_id = sh.id LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id WHERE (CASE WHEN :name IS NULL OR :name = '' THEN 1=1 WHEN SUBSTR(:name,1,1) = '=' THEN COALESCE(sd.name, r.name_on_page) = SUBSTR(:name,2) ELSE LOWER(COALESCE(sd.name, r.name_on_page)) LIKE LOWER('%' || :name || '%') END) AND (:slug IS NULL OR :slug = '' OR sh.slug = :slug) ORDER BY COALESCE(sd.name, r.name_on_page), sn.snapshot_date DESC LIMIT COALESCE(NULLIF(:limit,''), 200)",
+                    "params": ["name", "slug", "limit"]
+                },
+                "snapshot_leaderboard": {
+                    "title": "Snapshot Leaderboard",
+                    "description": "Full ranked list for any historical snapshot. Leave snapshot_date blank for the latest edition. Optionally filter by country. Default limit: 200.",
+                    "sql": "WITH target AS (SELECT id, snapshot_date FROM snapshots WHERE snapshot_date = COALESCE(NULLIF(:snapshot_date,''), (SELECT MAX(snapshot_date) FROM snapshots))) SELECT r.rank, COALESCE(sd.name, r.name_on_page) AS name, sh.slug, COALESCE(sd.city, '') AS city, COALESCE(sd.country, r.country_on_page) AS country, sd.website, sd.instagram, target.snapshot_date FROM rankings r JOIN target ON r.snapshot_id = target.id JOIN shops sh ON r.shop_id = sh.id LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id WHERE (:country IS NULL OR :country = '' OR LOWER(COALESCE(sd.country, r.country_on_page,'')) LIKE LOWER('%' || :country || '%')) ORDER BY r.rank ASC LIMIT COALESCE(NULLIF(:limit,''), 200)",
+                    "params": ["snapshot_date", "country", "limit"]
+                },
+                "country_breakdown": {
+                    "title": "Country Breakdown",
+                    "description": "Distribution of ranked coffee shops by country for a given snapshot — shows shop count, best rank, average rank, and a list of shops with their positions. Leave snapshot_date blank for the latest edition. Default limit: 50.",
+                    "sql": "WITH target AS (SELECT id FROM snapshots WHERE snapshot_date = COALESCE(NULLIF(:snapshot_date,''), (SELECT MAX(snapshot_date) FROM snapshots))), ranked AS (SELECT COALESCE(sd.country, r.country_on_page) AS country, r.rank, COALESCE(sd.name, r.name_on_page) AS name FROM rankings r JOIN target ON r.snapshot_id = target.id LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id) SELECT country, COUNT(*) AS shop_count, MIN(rank) AS best_rank, ROUND(AVG(rank), 1) AS avg_rank, GROUP_CONCAT(rank || '. ' || name, ' | ') AS shops FROM ranked WHERE (:country IS NULL OR :country = '' OR LOWER(country) LIKE LOWER('%' || :country || '%')) GROUP BY country ORDER BY shop_count DESC, best_rank ASC LIMIT COALESCE(NULLIF(:limit,''), 50)",
+                    "params": ["snapshot_date", "country", "limit"]
+                },
+                "biggest_movers": {
+                    "title": "Biggest Movers",
+                    "description": "Shops with the largest rank changes between two consecutive snapshots. Leave snapshot_date blank to compare the latest edition with its predecessor. Filter direction to 'climbed' or 'dropped'. Default limit: 50.",
+                    "sql": "WITH target AS (SELECT id, snapshot_date FROM snapshots WHERE snapshot_date = COALESCE(NULLIF(:snapshot_date,''), (SELECT MAX(snapshot_date) FROM snapshots))), prev AS (SELECT id, snapshot_date FROM snapshots WHERE snapshot_date < (SELECT snapshot_date FROM target) ORDER BY snapshot_date DESC LIMIT 1), curr AS (SELECT shop_id, rank FROM rankings WHERE snapshot_id = (SELECT id FROM target)), prv AS (SELECT shop_id, rank FROM rankings WHERE snapshot_id = (SELECT id FROM prev)) SELECT COALESCE(sd.name, r.name_on_page) AS name, sh.slug, prv.rank AS previous_rank, curr.rank AS current_rank, (prv.rank - curr.rank) AS rank_change, CASE WHEN prv.rank > curr.rank THEN 'climbed' ELSE 'dropped' END AS direction, (SELECT snapshot_date FROM target) AS snapshot_date, (SELECT snapshot_date FROM prev) AS compared_to FROM curr JOIN prv ON curr.shop_id = prv.shop_id JOIN shops sh ON curr.shop_id = sh.id JOIN rankings r ON r.shop_id = curr.shop_id AND r.snapshot_id = (SELECT id FROM target) LEFT JOIN shop_details sd ON sd.shop_id = curr.shop_id AND sd.snapshot_id = (SELECT id FROM target) WHERE prv.rank != curr.rank AND (:direction IS NULL OR :direction = '' OR CASE WHEN prv.rank > curr.rank THEN 'climbed' ELSE 'dropped' END = :direction) ORDER BY ABS(prv.rank - curr.rank) DESC LIMIT COALESCE(NULLIF(:limit,''), 50)",
+                    "params": ["snapshot_date", "direction", "limit"]
+                },
+                "newcomers_and_dropouts": {
+                    "title": "Newcomers & Dropouts",
+                    "description": "Shops that entered or exited the ranking between two consecutive snapshots. Leave snapshot_date blank for the latest vs its predecessor. Filter status to 'newcomer' or 'dropout'. Default limit: 100.",
+                    "sql": "WITH target AS (SELECT id, snapshot_date FROM snapshots WHERE snapshot_date = COALESCE(NULLIF(:snapshot_date,''), (SELECT MAX(snapshot_date) FROM snapshots))), prev AS (SELECT id, snapshot_date FROM snapshots WHERE snapshot_date < (SELECT snapshot_date FROM target) ORDER BY snapshot_date DESC LIMIT 1), newcomers AS (SELECT 'newcomer' AS status, r.rank, r.shop_id, r.snapshot_id FROM rankings r WHERE r.snapshot_id = (SELECT id FROM target) AND r.shop_id NOT IN (SELECT shop_id FROM rankings WHERE snapshot_id = (SELECT id FROM prev))), dropouts AS (SELECT 'dropout' AS status, r.rank, r.shop_id, r.snapshot_id FROM rankings r WHERE r.snapshot_id = (SELECT id FROM prev) AND r.shop_id NOT IN (SELECT shop_id FROM rankings WHERE snapshot_id = (SELECT id FROM target))), combined AS (SELECT * FROM newcomers UNION ALL SELECT * FROM dropouts) SELECT c.status, c.rank, COALESCE(sd.name, r.name_on_page) AS name, sh.slug, COALESCE(sd.country, r.country_on_page) AS country, CASE c.status WHEN 'newcomer' THEN (SELECT snapshot_date FROM target) ELSE (SELECT snapshot_date FROM prev) END AS snapshot_date FROM combined c JOIN shops sh ON c.shop_id = sh.id JOIN rankings r ON r.shop_id = c.shop_id AND r.snapshot_id = c.snapshot_id LEFT JOIN shop_details sd ON sd.shop_id = c.shop_id AND sd.snapshot_id = c.snapshot_id WHERE (:status IS NULL OR :status = '' OR c.status = :status) ORDER BY c.status, c.rank ASC LIMIT COALESCE(NULLIF(:limit,''), 100)",
+                    "params": ["snapshot_date", "status", "limit"]
+                },
+                "consistent_performers": {
+                    "title": "Consistent Performers",
+                    "description": "Shops appearing in the most snapshots, with appearance percentage, best rank, and average rank. A high appearance_pct means the shop has featured consistently across all scraped editions. Optionally filter by country. Default limit: 50.",
+                    "sql": "WITH total_count AS (SELECT COUNT(*) AS total FROM snapshots), appearances AS (SELECT r.shop_id, COUNT(DISTINCT r.snapshot_id) AS snapshots_appeared, MIN(r.rank) AS best_rank, ROUND(AVG(r.rank), 1) AS avg_rank FROM rankings r GROUP BY r.shop_id), latest AS (SELECT id FROM snapshots ORDER BY snapshot_date DESC LIMIT 1) SELECT COALESCE(sd.name, sh.slug) AS name, sh.slug, COALESCE(sd.country, '') AS country, COALESCE(sd.city, '') AS city, a.snapshots_appeared, ROUND(100.0 * a.snapshots_appeared / tc.total, 1) AS appearance_pct, a.best_rank, a.avg_rank, sd.website, sd.instagram FROM appearances a JOIN shops sh ON a.shop_id = sh.id JOIN total_count tc LEFT JOIN shop_details sd ON sd.shop_id = a.shop_id AND sd.snapshot_id = (SELECT id FROM latest) WHERE (:country IS NULL OR :country = '' OR LOWER(COALESCE(sd.country,'')) LIKE LOWER('%' || :country || '%')) ORDER BY a.snapshots_appeared DESC, a.avg_rank ASC LIMIT COALESCE(NULLIF(:limit,''), 50)",
+                    "params": ["country", "limit"]
+                }
+            },
+            "tables": {
+                "snapshots": {
+                    "description_html": "One row per scraping run. <code>snapshot_date</code> is the unique identifier for a ranking edition. <code>wayback_timestamp</code> is non-null for Wayback Machine backfills.",
+                    "sort_desc": "snapshot_date",
+                    "sortable_columns": ["snapshot_date", "scraped_at"],
+                    "columns": {
+                        "id": "Internal unique identifier",
+                        "snapshot_date": "Logical date of the ranking edition (UNIQUE)",
+                        "list_page_url": "Exact URL used to fetch the ranking page for this snapshot",
+                        "wayback_timestamp": "Wayback Machine timestamp; NULL for live scrapes",
+                        "scraped_at": "Wall-clock time when this snapshot was inserted"
+                    }
+                },
+                "shops": {
+                    "description_html": "Stable identity table — one row per unique coffee shop. The <code>slug</code> is derived from the detail page URL path and never changes.",
+                    "sort_desc": "created_at",
+                    "sortable_columns": ["slug", "created_at"],
+                    "columns": {
+                        "id": "Internal unique identifier",
+                        "slug": "URL-derived stable identifier (e.g. blue-bottle-coffee)",
+                        "created_at": "Timestamp when this shop was first seen"
+                    }
+                },
+                "rankings": {
+                    "description_html": "One row per shop per snapshot. Records rank and display text exactly as it appeared on the list page. Use <code>snapshot_id</code> and <code>shop_id</code> to join with other tables.",
+                    "sort": "rank",
+                    "sortable_columns": ["rank", "snapshot_id", "country_on_page"],
+                    "facets": ["country_on_page"],
+                    "columns": {
+                        "id": "Internal unique identifier",
+                        "snapshot_id": "Foreign key to snapshots",
+                        "shop_id": "Foreign key to shops",
+                        "rank": "Position on the ranking page (1–200)",
+                        "detail_page_url": "Exact detail page URL as it appeared on the list page",
+                        "name_on_page": "Shop name as it appeared on the list page",
+                        "country_on_page": "Country as it appeared on the list page"
+                    }
+                },
+                "shop_details": {
+                    "description_html": "Detail page data for each shop in each snapshot — name, location, contact info, and description scraped from the shop's individual page. One row per (shop, snapshot) pair.",
+                    "sort_desc": "snapshot_id",
+                    "sortable_columns": ["name", "country", "city", "snapshot_id"],
+                    "facets": ["country", "city", "is_wayback"],
+                    "columns": {
+                        "id": "Internal unique identifier",
+                        "shop_id": "Foreign key to shops",
+                        "snapshot_id": "Foreign key to snapshots",
+                        "name": "Shop name parsed from detail page",
+                        "city": "City parsed from detail page",
+                        "country": "Country parsed from detail page",
+                        "address": "Full address parsed from detail page",
+                        "website": "Official website URL",
+                        "instagram": "Instagram handle or URL",
+                        "description": "Multi-paragraph description from the detail page",
+                        "image_urls": "JSON-encoded list of image URLs from the detail page",
+                        "is_wayback": "1 if this detail was fetched from the Wayback Machine, 0 for live scrape"
+                    }
+                }
+            }
+        }
+    }
+}
