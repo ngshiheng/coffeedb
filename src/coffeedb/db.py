@@ -1,4 +1,19 @@
+"""SQLite schema and persistence helpers for temporal coffee shop snapshots."""
+
 import sqlite3
+
+FINAL_SCHEMA_TABLES = {"snapshots", "shops", "rankings", "shop_details"}
+RANKING_REQUIRED_COLUMNS = {"shop_id", "detail_page_url"}
+SNAPSHOT_REQUIRED_COLUMNS = {"list_page_url"}
+SHOP_REQUIRED_COLUMNS = {"id", "slug"}
+DETAIL_REQUIRED_COLUMNS = {"shop_id", "snapshot_id", "is_wayback"}
+LEGACY_TABLES_TO_DROP = (
+    "shop_details",
+    "rankings",
+    "shops",
+    "coffee_shops",
+    "snapshots",
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -64,14 +79,14 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _is_final_schema(conn: sqlite3.Connection) -> bool:
+    """Return whether the current database already matches the expected schema."""
     tables = {
         row["name"]
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    required_tables = {"snapshots", "shops", "rankings", "shop_details"}
-    if not required_tables.issubset(tables):
+    if not FINAL_SCHEMA_TABLES.issubset(tables):
         return False
 
     ranking_cols = _table_columns(conn, "rankings")
@@ -80,25 +95,30 @@ def _is_final_schema(conn: sqlite3.Connection) -> bool:
     details_cols = _table_columns(conn, "shop_details")
 
     return (
-        {"shop_id", "detail_page_url"}.issubset(ranking_cols)
-        and {"list_page_url"}.issubset(snapshot_cols)
-        and {"id", "slug"}.issubset(shops_cols)
-        and {"shop_id", "snapshot_id", "is_wayback"}.issubset(details_cols)
+        RANKING_REQUIRED_COLUMNS.issubset(ranking_cols)
+        and SNAPSHOT_REQUIRED_COLUMNS.issubset(snapshot_cols)
+        and SHOP_REQUIRED_COLUMNS.issubset(shops_cols)
+        and DETAIL_REQUIRED_COLUMNS.issubset(details_cols)
     )
 
 
 def _reset_to_final_schema(conn: sqlite3.Connection) -> None:
+    """Drop old tables so the final schema can be recreated cleanly."""
+    drop_statements = "\n".join(
+        f"DROP TABLE IF EXISTS {table};" for table in LEGACY_TABLES_TO_DROP
+    )
     conn.executescript(
-        """
+        f"""
         PRAGMA foreign_keys = OFF;
-        DROP TABLE IF EXISTS shop_details;
-        DROP TABLE IF EXISTS rankings;
-        DROP TABLE IF EXISTS shops;
-        DROP TABLE IF EXISTS coffee_shops;
-        DROP TABLE IF EXISTS snapshots;
+        {drop_statements}
         PRAGMA foreign_keys = ON;
         """
     )
+
+
+def _commit_if_requested(conn: sqlite3.Connection, auto_commit: bool) -> None:
+    if auto_commit:
+        conn.commit()
 
 
 def init_db(db_path: str) -> None:
@@ -117,6 +137,7 @@ def insert_snapshot(
     snapshot_date: str,
     list_page_url: str,
     wayback_timestamp: str | None = None,
+    auto_commit: bool = True,
 ) -> int:
     conn.execute(
         """
@@ -132,11 +153,13 @@ def insert_snapshot(
     row = cur.fetchone()
     if row is None:
         raise RuntimeError(f"Failed to create or fetch snapshot for {snapshot_date}")
-    conn.commit()
+    _commit_if_requested(conn, auto_commit)
     return int(row["id"])
 
 
-def get_or_create_shop(conn: sqlite3.Connection, slug: str) -> int:
+def get_or_create_shop(
+    conn: sqlite3.Connection, slug: str, auto_commit: bool = True
+) -> int:
     conn.execute(
         "INSERT OR IGNORE INTO shops (slug) VALUES (?)",
         (slug,),
@@ -148,7 +171,7 @@ def get_or_create_shop(conn: sqlite3.Connection, slug: str) -> int:
     row = cur.fetchone()
     if row is None:
         raise RuntimeError(f"Failed to create or fetch shop for slug={slug}")
-    conn.commit()
+    _commit_if_requested(conn, auto_commit)
     return int(row["id"])
 
 
@@ -160,6 +183,7 @@ def insert_ranking(
     detail_page_url: str,
     name_on_page: str | None,
     country_on_page: str | None,
+    auto_commit: bool = True,
 ) -> None:
     conn.execute(
         """
@@ -169,7 +193,7 @@ def insert_ranking(
         """,
         (snapshot_id, shop_id, rank, detail_page_url, name_on_page, country_on_page),
     )
-    conn.commit()
+    _commit_if_requested(conn, auto_commit)
 
 
 def upsert_shop_detail(
@@ -177,6 +201,7 @@ def upsert_shop_detail(
     shop_id: int,
     snapshot_id: int,
     is_wayback: bool,
+    auto_commit: bool = True,
     **fields,
 ) -> None:
     data = {
@@ -191,7 +216,7 @@ def upsert_shop_detail(
         f"INSERT OR REPLACE INTO shop_details ({columns}) VALUES ({placeholders})",
         list(data.values()),
     )
-    conn.commit()
+    _commit_if_requested(conn, auto_commit)
 
 
 def get_shop_slug_rows_for_snapshot(
