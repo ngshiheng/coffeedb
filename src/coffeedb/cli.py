@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import nullcontext
 from datetime import date
 from typing import Any, Mapping
 
@@ -105,6 +106,9 @@ def scrape_live(
         "--fresh",
         help="Bypass HTTP cache and fetch fresh responses.",
     ),
+    verbose: bool = typer.Option(
+        False, "-v", "--verbose", help="Print each URL being fetched."
+    ),
 ) -> None:
     """Scrape the current live site: list page + all 100 detail pages."""
     database.init_db(db)
@@ -126,10 +130,18 @@ def scrape_live(
     )
     typer.echo(f"Inserted snapshot id={snapshot_id} ({today})")
 
-    with typer.progressbar(shops, label="Scraping detail pages") as progress:
+    n = len(shops)
+    ctx = (
+        typer.progressbar(shops, label="Scraping detail pages")
+        if not verbose
+        else nullcontext(shops)
+    )
+    with ctx as progress:
         for shop in progress:
             slug = shop["slug"]
             detail_url = build_detail_url(slug)
+            if verbose:
+                typer.echo(f"  [{shop['rank']:>3}/{n}] {slug}")
             detail = scraper_module.scrape_detail(detail_url, use_cache=use_cache)
             detail_fields = _build_detail_fields(
                 detail,
@@ -157,6 +169,9 @@ def scrape_historical(
         "--fresh",
         help="Bypass HTTP cache and fetch fresh responses.",
     ),
+    verbose: bool = typer.Option(
+        False, "-v", "--verbose", help="Print each URL being fetched."
+    ),
 ) -> None:
     """Scrape all Wayback Machine snapshots of the list page."""
     database.init_db(db)
@@ -171,18 +186,37 @@ def scrape_historical(
 
     typer.echo(f"Found {len(snapshots)} snapshot(s) to process.")
 
-    with typer.progressbar(snapshots, label="Snapshots") as progress:
-        for snap in progress:
+    total = len(snapshots)
+    ctx = (
+        typer.progressbar(snapshots, label="Snapshots")
+        if not verbose
+        else nullcontext(snapshots)
+    )
+    with ctx as progress:
+        for i, snap in enumerate(progress, 1):
             ts = snap["timestamp"]
             snap_date = snap["snapshot_date"]
 
-            html = wayback.fetch_archived(ts, LIST_URL, use_cache=use_cache)
+            if verbose:
+                typer.echo(f"[{i}/{total}] {snap_date}", nl=False)
+            html, _from_cache = wayback.fetch_archived(
+                ts, LIST_URL, use_cache=use_cache
+            )
+            if verbose:
+                typer.echo(f"  list:[{'cache' if _from_cache else 'fetch'}]", nl=False)
             if html is None:
+                if verbose:
+                    typer.echo("  failed")
                 continue
 
             shops = scraper_module.scrape_list(LIST_URL, html=html)
             if not shops:
+                if verbose:
+                    typer.echo("  no shops")
                 continue
+
+            if verbose:
+                typer.echo(f"  {len(shops)} shops", nl=False)
 
             snapshot_id = database.insert_snapshot(
                 conn,
@@ -191,15 +225,18 @@ def scrape_historical(
                 wayback_timestamp=ts,
             )
 
-            for shop in shops:
+            failed = 0
+            total_shops = len(shops)
+            for idx, shop in enumerate(shops, 1):
                 slug = shop["slug"]
                 detail_url = build_detail_url(slug)
                 archived_detail_url = build_wayback_url(ts, detail_url)
 
-                detail_html = wayback.fetch_archived(
+                detail_html, _dc = wayback.fetch_archived(
                     ts, detail_url, use_cache=use_cache
                 )
                 if detail_html is None:
+                    failed += 1
                     detail_fields = _build_detail_fields(
                         None,
                         fallback_name=shop["name"],
@@ -213,6 +250,10 @@ def scrape_historical(
                         is_wayback=True,
                         detail_fields=detail_fields,
                     )
+                    if verbose and idx % 10 == 0 and idx < total_shops:
+                        typer.echo(
+                            f"  |  details:{idx}/{total_shops} (failed:{failed})"
+                        )
                     continue
 
                 detail = scraper_module.scrape_detail(
@@ -231,6 +272,14 @@ def scrape_historical(
                     is_wayback=True,
                     detail_fields=detail_fields,
                 )
+
+                if verbose and idx % 10 == 0 and idx < total_shops:
+                    typer.echo(f"  |  details:{idx}/{total_shops} (failed:{failed})")
+
+            if verbose:
+                ok = len(shops) - failed
+                suffix = f" ({failed} failed)" if failed else ""
+                typer.echo(f"  |  details:{ok}/{len(shops)}{suffix}")
 
     typer.echo("Done.")
 

@@ -42,11 +42,12 @@ def _fetch_text(
     timeout: float,
     headers: dict[str, str],
     use_cache: bool,
-) -> str:
+) -> tuple[str, bool]:
     with build_client(timeout=timeout, headers=headers, use_cache=use_cache) as client:
         resp = client.get(url)
         resp.raise_for_status()
-        return resp.text
+        from_cache = bool(resp.extensions.get("hishel_from_cache", False))
+        return resp.text, from_cache
 
 
 def _snapshot_date_from_timestamp(timestamp: str) -> str:
@@ -94,15 +95,16 @@ def fetch_archived(
     timestamp: str,
     target_url: str,
     use_cache: bool = True,
-) -> str | None:
-    """Fetch a Wayback Machine archived page and return its HTML.
+) -> tuple[str | None, bool]:
+    """Fetch a Wayback Machine archived page and return its HTML and cache status.
 
-    Returns None if the request fails. Always sleeps a small fixed delay after
-    the request to respect Wayback Machine rate limits.
+    Returns (html, from_cache). html is None if the request fails. Always sleeps
+    a small fixed delay after the request to respect Wayback Machine rate limits.
     """
     url = build_wayback_url(timestamp, target_url)
+    from_cache = False
     try:
-        html = _fetch_text(
+        html, from_cache = _fetch_text(
             url,
             timeout=WAYBACK_HTTP_TIMEOUT_SECONDS,
             headers=_WAYBACK_HEADERS,
@@ -112,4 +114,4 @@ def fetch_archived(
         html = None
     finally:
         time.sleep(DEFAULT_WAYBACK_DELAY_SECONDS)
-    return html
+    return html, from_cache

@@ -4,7 +4,7 @@
     "source": "The World's 100 Best Coffee Shops",
     "source_url": "https://theworlds100bestcoffeeshops.com",
     "databases": {
-        "coffeedb": {
+        "coffee": {
             "queries": {
                 "shop_finder": {
                     "title": "Shop Finder",
