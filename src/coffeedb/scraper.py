@@ -1,6 +1,7 @@
 """HTML scraping helpers for the live site and archived detail pages."""
 
 import re
+from typing import Any, Mapping
 from urllib.parse import urljoin, urlparse
 
 from parsel import Selector
@@ -58,6 +59,16 @@ EXCLUDED_WEBSITE_TOKENS = (
 )
 EXCLUDED_INSTAGRAM_TOKENS = ("theworlds100bestcoffeeshops",)
 INSTAGRAM_DOMAIN_TOKEN = "instagram.com"
+
+DETAIL_TEXT_FIELDS = (
+    "name",
+    "city",
+    "country",
+    "address",
+    "website",
+    "instagram",
+    "description",
+)
 
 
 def _fetch(url: str, use_cache: bool = True) -> str:
@@ -298,3 +309,17 @@ def scrape_detail(url: str, html: str | None = None, use_cache: bool = True) -> 
         "description": description,
         "image_urls": image_urls,
     }
+
+
+def is_empty_detail(detail: Mapping[str, Any] | None) -> bool:
+    """Return True when a detail payload contains no meaningful extracted data."""
+    if not detail:
+        return True
+
+    for field in DETAIL_TEXT_FIELDS:
+        value = _clean_text(str(detail.get(field))) if detail.get(field) else None
+        if value:
+            return False
+
+    image_urls = detail.get("image_urls")
+    return not isinstance(image_urls, list) or len(image_urls) == 0
