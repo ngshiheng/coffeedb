@@ -18,3 +18,8 @@ datasette:  ## run datasette with metadata.json for local development.
 	done; \
 	echo "Starting datasette on port $$PORT"; \
 	$(DATASETTE) --root coffee.db --metadata data/metadata.json --port $$PORT
+
+.PHONY: test
+test:  ## install test dependencies and run the test suite.
+	uv sync --extra test
+	uv run pytest
