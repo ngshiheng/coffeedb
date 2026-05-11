@@ -1,24 +1,21 @@
-name: Scrape latest data
+name: Backfill historical data
 
 on:
-    push:
-        branches: [main]
-        paths:
-            - "**.py"
-            - ".github/workflows/**"
-            - Makefile
-            - scripts/**
-            - data/metadata.json
+    workflow_dispatch:
+        inputs:
+            fresh:
+                description: "Bypass HTTP cache and fetch fresh responses"
+                type: boolean
+                default: false
 
-    schedule:
-        - cron: "0 0 * * 0"
-
+# Must use the same group as scrape.yml so a manual backfill can't race a
+# scheduled live run and overwrite the shared DB artifact.
 concurrency:
     group: coffee-db-artifact
     cancel-in-progress: false
 
 jobs:
-    scrape:
+    backfill:
         runs-on: ubuntu-latest
         permissions:
             actions: read
@@ -31,7 +28,7 @@ jobs:
                   python-version: "3.13"
             - name: Set up uv
               uses: astral-sh/setup-uv@v6
-            - name: Find latest coffeedb artifact run id
+            - name: Find latest coffee-db artifact run id
               env:
                   GH_TOKEN: ${{ github.token }}
               run: |
@@ -56,20 +53,16 @@ jobs:
               continue-on-error: true
             - name: Install dependencies
               run: uv sync
-            - name: Scrape live ranking data
+            - name: Backfill historical Wayback snapshots
               run: |
                   uv run coffeedb init --db data/coffee.db
-                  uv run coffeedb scrape live --db data/coffee.db
-            - name: Cleanup empty and sparse details
-              run: |
-                  bash scripts/cleanup-empty-details.sh data/coffee.db
-                  bash scripts/repair-sparse-details.sh data/coffee.db
+                  uv run coffeedb scrape historical --db data/coffee.db ${{ inputs.fresh && '--fresh' || '' }}
             - name: Validate DB row count
               run: |
-                  COUNT=$(sqlite3 data/coffee.db "SELECT COUNT(*) FROM shops;")
-                  echo "Row count: $COUNT"
-                  if [ "$COUNT" -lt 10 ]; then
-                    echo "ERROR: Row count $COUNT is below threshold. Aborting."
+                  COUNT=$(sqlite3 data/coffee.db "SELECT COUNT(*) FROM snapshots;")
+                  echo "Snapshot count: $COUNT"
+                  if [ "$COUNT" -lt 1 ]; then
+                    echo "ERROR: No snapshots found in DB. Aborting."
                     exit 1
                   fi
             - name: Upload database artifact
