@@ -23,6 +23,7 @@ jobs:
         runs-on: ubuntu-latest
         permissions:
             actions: read
+            contents: read
         steps:
             - uses: actions/checkout@v6
             - name: Set up Python
