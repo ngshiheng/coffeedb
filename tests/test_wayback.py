@@ -1,16 +1,17 @@
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from coffeedb import wayback
 
 
 @patch("coffeedb.wayback._fetch_json", side_effect=httpx.HTTPError("boom"))
-def test_get_snapshots_returns_empty_on_http_error(mock_fetch_json) -> None:
-    snapshots = wayback.get_snapshots("https://example.com")
+def test_get_snapshots_raises_on_http_error(mock_fetch_json) -> None:
+    with pytest.raises(RuntimeError, match="Wayback CDX API request failed"):
+        wayback.get_snapshots("https://example.com")
 
-    assert snapshots == []
-    mock_fetch_json.assert_called_once()
+    assert mock_fetch_json.call_count == wayback.CDX_MAX_RETRIES
 
 
 @patch("coffeedb.wayback._fetch_json")

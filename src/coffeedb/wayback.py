@@ -2,6 +2,7 @@
 
 import time
 
+import backoff
 import httpx
 
 from coffeedb.client import build_client
@@ -17,6 +18,7 @@ CDX_OUTPUT_FORMAT = "json"
 CDX_STATUS_FILTER = "statuscode:200"
 CDX_COLLAPSE_BY_DAY = "timestamp:8"
 CDX_HEADER_ROWS = 1
+CDX_MAX_RETRIES = 3
 WAYBACK_USER_AGENT = "coffeedb-scraper/1.0 (historical research)"
 
 _WAYBACK_HEADERS = {"User-Agent": WAYBACK_USER_AGENT}
@@ -55,6 +57,29 @@ def _snapshot_date_from_timestamp(timestamp: str) -> str:
     return f"{timestamp[:4]}-{timestamp[4:6]}-{timestamp[6:8]}"
 
 
+class _EmptyCDXResponse(Exception):
+    """Raised when the CDX API returns a valid but empty response, to trigger a retry."""
+
+
+@backoff.on_exception(
+    backoff.expo,
+    (httpx.HTTPError, _EmptyCDXResponse),
+    max_tries=CDX_MAX_RETRIES,
+    jitter=backoff.full_jitter,
+)
+def _fetch_cdx(params: dict[str, str], use_cache: bool) -> list:
+    data = _fetch_json(
+        WAYBACK_CDX_API_URL,
+        params=params,
+        timeout=WAYBACK_HTTP_TIMEOUT_SECONDS,
+        headers=_WAYBACK_HEADERS,
+        use_cache=use_cache,
+    )
+    if not isinstance(data, list) or len(data) <= CDX_HEADER_ROWS:
+        raise _EmptyCDXResponse
+    return data
+
+
 def get_snapshots(target_url: str, use_cache: bool = True) -> list[dict]:
     """Query the Wayback CDX API and return available snapshots.
 
@@ -69,19 +94,17 @@ def get_snapshots(target_url: str, use_cache: bool = True) -> list[dict]:
         "filter": CDX_STATUS_FILTER,
     }
     try:
-        data = _fetch_json(
-            WAYBACK_CDX_API_URL,
-            params=params,
-            timeout=WAYBACK_HTTP_TIMEOUT_SECONDS,
-            headers=_WAYBACK_HEADERS,
-            use_cache=use_cache,
-        )
-    except (httpx.HTTPError, ValueError):
+        data = _fetch_cdx(params, use_cache)
+    except _EmptyCDXResponse:
         return []
-
-    if not data or len(data) <= CDX_HEADER_ROWS:
-        # First row is the header; fewer rows means no results
-        return []
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"Wayback CDX API request failed after {CDX_MAX_RETRIES} attempts: {exc}"
+        ) from exc
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Wayback CDX API returned unexpected response: {exc}"
+        ) from exc
 
     snapshots = []
     for row in data[CDX_HEADER_ROWS:]:
