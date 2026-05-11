@@ -2,6 +2,27 @@
 
 coffeedb is a small SQLite-backed scraper for the World's 100 Best Coffee Shops website. It can capture the current live ranking, replay archived list/detail pages from the Wayback Machine, and keep each scrape as a dated snapshot so ranking and detail changes remain queryable over time.
 
+## How This Works
+
+```mermaid
+graph TB
+	subgraph GitHub
+		subgraph Actions
+			workflow[scrape.yml]
+		end
+		subgraph Artifacts
+			db[(coffee.db)]
+		end
+	end
+	subgraph Source Website
+		site[World's 100 Best Coffee Shops]
+	end
+
+	site --> |1: Fetch ranking and detail pages| workflow
+	workflow --> |2: Save snapshot data| db
+	workflow --> |3: Upload artifact| db
+```
+
 ## Quick start
 
 ### Install
@@ -76,6 +97,26 @@ HTTP requests go through a small on-disk cache backed by `hishel`.
 Environment variables:
 
 - `COFFEEDB_CACHE_DIR`: override the cache directory. Default: `.cache/`
+
+## Automation
+
+GitHub Actions workflow [.github/workflows/scrape.yml](.github/workflows/scrape.yml) follows the same orchestration style as passportindexdb: path-filtered push triggers, manual dispatch, and weekly scheduled scraping.
+
+Workflow behavior:
+
+- restores the latest `coffeedb-sqlite` artifact when available (so snapshots accumulate)
+- sets up Python and `uv`
+- runs `uv run coffeedb init --db data/coffee.db`
+- runs `uv run coffeedb scrape live --db data/coffee.db`
+- runs cleanup scripts for empty/sparse detail rows
+- uploads `data/coffee.db` as a workflow artifact (`coffeedb-sqlite`)
+
+Run it manually from Actions:
+
+1. Open the `Scrape latest data` workflow.
+2. Click `Run workflow`.
+
+Local commands stay the source of truth for scraper behavior; the workflow simply automates the same CLI entrypoints.
 
 ## Project structure
 
