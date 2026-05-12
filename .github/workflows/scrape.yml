@@ -1,17 +1,10 @@
 name: Scrape latest data
 
 on:
-    push:
-        branches: [main]
-        paths:
-            - "**.py"
-            - ".github/workflows/**"
-            - Makefile
-            - scripts/**
-            - data/metadata.json
-
     schedule:
         - cron: "0 0 * * 0"
+
+    workflow_dispatch:
 
 concurrency:
     group: coffee-db-artifact
