@@ -1,23 +1,25 @@
+import pytest
+
 from coffeedb import db
 
 
-def _setup_memory_db():
+@pytest.fixture
+def db_conn():
     conn = db.get_conn(":memory:")
     conn.executescript(db.SCHEMA)
-    return conn
+    yield conn
+    conn.close()
 
 
-def test_insert_snapshot_is_idempotent() -> None:
-    conn = _setup_memory_db()
-
+def test_insert_snapshot_is_idempotent(db_conn) -> None:
     first = db.insert_snapshot(
-        conn,
+        db_conn,
         snapshot_date="2026-01-01",
         list_page_url="https://example.com/list",
         wayback_timestamp=None,
     )
     second = db.insert_snapshot(
-        conn,
+        db_conn,
         snapshot_date="2026-01-01",
         list_page_url="https://example.com/list",
         wayback_timestamp=None,
@@ -26,28 +28,25 @@ def test_insert_snapshot_is_idempotent() -> None:
     assert first == second
 
 
-def test_get_or_create_shop_is_idempotent() -> None:
-    conn = _setup_memory_db()
-
-    first = db.get_or_create_shop(conn, "shop-a")
-    second = db.get_or_create_shop(conn, "shop-a")
+def test_get_or_create_shop_is_idempotent(db_conn) -> None:
+    first = db.get_or_create_shop(db_conn, "shop-a")
+    second = db.get_or_create_shop(db_conn, "shop-a")
 
     assert first == second
 
 
-def test_insert_ranking_replace_keeps_single_rank_per_snapshot() -> None:
-    conn = _setup_memory_db()
+def test_insert_ranking_replace_keeps_single_rank_per_snapshot(db_conn) -> None:
     snapshot_id = db.insert_snapshot(
-        conn,
+        db_conn,
         snapshot_date="2026-01-01",
         list_page_url="https://example.com/list",
         wayback_timestamp=None,
     )
-    shop_a = db.get_or_create_shop(conn, "shop-a")
-    shop_b = db.get_or_create_shop(conn, "shop-b")
+    shop_a = db.get_or_create_shop(db_conn, "shop-a")
+    shop_b = db.get_or_create_shop(db_conn, "shop-b")
 
     db.insert_ranking(
-        conn,
+        db_conn,
         snapshot_id=snapshot_id,
         shop_id=shop_a,
         rank=1,
@@ -56,7 +55,7 @@ def test_insert_ranking_replace_keeps_single_rank_per_snapshot() -> None:
         country_on_page="Japan",
     )
     db.insert_ranking(
-        conn,
+        db_conn,
         snapshot_id=snapshot_id,
         shop_id=shop_b,
         rank=1,
@@ -65,7 +64,7 @@ def test_insert_ranking_replace_keeps_single_rank_per_snapshot() -> None:
         country_on_page="Japan",
     )
 
-    row = conn.execute(
+    row = db_conn.execute(
         "SELECT shop_id, detail_page_url FROM rankings WHERE snapshot_id = ? AND rank = ?",
         (snapshot_id, 1),
     ).fetchone()
@@ -75,34 +74,31 @@ def test_insert_ranking_replace_keeps_single_rank_per_snapshot() -> None:
     assert row["detail_page_url"] == "https://example.com/locales/shop-b/"
 
 
-def test_upsert_shop_detail_replaces_existing_row() -> None:
-    conn = _setup_memory_db()
+def test_upsert_shop_detail_replaces_existing_row(db_conn) -> None:
     snapshot_id = db.insert_snapshot(
-        conn,
+        db_conn,
         snapshot_date="2026-01-01",
         list_page_url="https://example.com/list",
         wayback_timestamp=None,
     )
-    shop_id = db.get_or_create_shop(conn, "shop-a")
+    shop_id = db.get_or_create_shop(db_conn, "shop-a")
 
     db.upsert_shop_detail(
-        conn,
+        db_conn,
         shop_id=shop_id,
         snapshot_id=snapshot_id,
         is_wayback=False,
-        name="Shop A",
-        city="Tokyo",
+        fields={"name": "Shop A", "city": "Tokyo"},
     )
     db.upsert_shop_detail(
-        conn,
+        db_conn,
         shop_id=shop_id,
         snapshot_id=snapshot_id,
         is_wayback=True,
-        name="Shop A Updated",
-        city="Osaka",
+        fields={"name": "Shop A Updated", "city": "Osaka"},
     )
 
-    row = conn.execute(
+    row = db_conn.execute(
         "SELECT name, city, is_wayback FROM shop_details WHERE shop_id = ? AND snapshot_id = ?",
         (shop_id, snapshot_id),
     ).fetchone()

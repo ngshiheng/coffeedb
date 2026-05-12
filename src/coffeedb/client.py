@@ -39,14 +39,24 @@ class SuccessResponseFilter(BaseFilter[Response]):
         return 200 <= item.status_code < 300
 
 
-# Initialize cache storage and policy
-_CACHE_DIR = Path(os.getenv(CACHE_DIR_ENV_VAR, DEFAULT_CACHE_DIR))
-_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-CACHE_STORAGE = SyncSqliteStorage(database_path=str(_CACHE_DIR / "hishel_cache.db"))
-CACHE_POLICY = FilterPolicy(
+_CACHE_POLICY = FilterPolicy(
     request_filters=[GetMethodFilter()],
     response_filters=[SuccessResponseFilter()],
 )
+
+# Lazily initialized on first use so importing this module has no filesystem side effects.
+_cache_storage: SyncSqliteStorage | None = None
+
+
+def _get_cache_storage() -> SyncSqliteStorage:
+    global _cache_storage
+    if _cache_storage is None:
+        cache_dir = Path(os.getenv(CACHE_DIR_ENV_VAR, DEFAULT_CACHE_DIR))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        _cache_storage = SyncSqliteStorage(
+            database_path=str(cache_dir / "hishel_cache.db")
+        )
+    return _cache_storage
 
 
 def build_client(
@@ -71,8 +81,8 @@ def build_client(
 
     if use_cache:
         return SyncCacheClient(
-            storage=CACHE_STORAGE,
-            policy=CACHE_POLICY,
+            storage=_get_cache_storage(),
+            policy=_CACHE_POLICY,
             follow_redirects=True,
             headers=merged_headers,
             timeout=timeout,

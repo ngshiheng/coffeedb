@@ -1,6 +1,19 @@
 """SQLite schema and persistence helpers for temporal coffee shop snapshots."""
 
 import sqlite3
+from typing import TypedDict
+
+
+class ShopDetailFields(TypedDict, total=False):
+    name: str | None
+    city: str | None
+    country: str | None
+    address: str | None
+    website: str | None
+    instagram: str | None
+    description: str | None
+    image_urls: str | None
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -65,11 +78,6 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row["name"] for row in rows}
 
 
-def _commit_if_requested(conn: sqlite3.Connection, auto_commit: bool) -> None:
-    if auto_commit:
-        conn.commit()
-
-
 def init_db(db_path: str) -> None:
     with get_conn(db_path) as conn:
         conn.executescript(SCHEMA)
@@ -84,7 +92,6 @@ def insert_snapshot(
     snapshot_date: str,
     list_page_url: str,
     wayback_timestamp: str | None = None,
-    auto_commit: bool = True,
 ) -> int:
     conn.execute(
         """
@@ -100,13 +107,10 @@ def insert_snapshot(
     row = cur.fetchone()
     if row is None:
         raise RuntimeError(f"Failed to create or fetch snapshot for {snapshot_date}")
-    _commit_if_requested(conn, auto_commit)
     return int(row["id"])
 
 
-def get_or_create_shop(
-    conn: sqlite3.Connection, slug: str, auto_commit: bool = True
-) -> int:
+def get_or_create_shop(conn: sqlite3.Connection, slug: str) -> int:
     conn.execute(
         "INSERT OR IGNORE INTO shops (slug) VALUES (?)",
         (slug,),
@@ -118,7 +122,6 @@ def get_or_create_shop(
     row = cur.fetchone()
     if row is None:
         raise RuntimeError(f"Failed to create or fetch shop for slug={slug}")
-    _commit_if_requested(conn, auto_commit)
     return int(row["id"])
 
 
@@ -130,7 +133,6 @@ def insert_ranking(
     detail_page_url: str,
     name_on_page: str | None,
     country_on_page: str | None,
-    auto_commit: bool = True,
 ) -> None:
     conn.execute(
         """
@@ -140,7 +142,6 @@ def insert_ranking(
         """,
         (snapshot_id, shop_id, rank, detail_page_url, name_on_page, country_on_page),
     )
-    _commit_if_requested(conn, auto_commit)
 
 
 def upsert_shop_detail(
@@ -148,8 +149,7 @@ def upsert_shop_detail(
     shop_id: int,
     snapshot_id: int,
     is_wayback: bool,
-    auto_commit: bool = True,
-    **fields,
+    fields: ShopDetailFields,
 ) -> None:
     data = {
         "shop_id": shop_id,
@@ -163,7 +163,6 @@ def upsert_shop_detail(
         f"INSERT OR REPLACE INTO shop_details ({columns}) VALUES ({placeholders})",
         list(data.values()),
     )
-    _commit_if_requested(conn, auto_commit)
 
 
 def get_shop_slug_rows_for_snapshot(

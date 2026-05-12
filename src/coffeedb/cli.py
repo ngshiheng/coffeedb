@@ -19,6 +19,7 @@ from coffeedb.constants import (
     build_detail_url,
     build_wayback_url,
 )
+from coffeedb.db import ShopDetailFields
 
 _DB_OPTION = typer.Option("coffee.db", "--db", help="Path to the SQLite database.")
 
@@ -39,7 +40,7 @@ def _build_detail_fields(
     *,
     fallback_name: str | None,
     fallback_country: str | None,
-) -> dict[str, Any]:
+) -> ShopDetailFields:
     """Normalize scraped detail data into the database payload shape."""
     payload = dict(detail or {})
     image_urls = payload.get("image_urls")
@@ -66,7 +67,7 @@ def _normalize_detail_fields_or_none(
     shop_slug: str,
     detail_url: str,
     snapshot_date: str | None = None,
-) -> dict[str, Any] | None:
+) -> ShopDetailFields | None:
     """Return normalized detail payload, or None when extracted detail is empty."""
     if scraper_module.is_empty_detail(detail):
         logger.warning(
@@ -91,13 +92,11 @@ def _save_shop_snapshot(
     shop: Mapping[str, Any],
     ranking_detail_url: str,
     is_wayback: bool,
-    detail_fields: Mapping[str, Any] | None,
+    detail_fields: ShopDetailFields | None,
 ) -> None:
     """Persist one ranking row and its detail payload in a single transaction."""
     with conn:
-        shop_id = database.get_or_create_shop(
-            conn, slug=shop["slug"], auto_commit=False
-        )
+        shop_id = database.get_or_create_shop(conn, slug=shop["slug"])
         database.insert_ranking(
             conn,
             snapshot_id=snapshot_id,
@@ -106,7 +105,6 @@ def _save_shop_snapshot(
             detail_page_url=ranking_detail_url,
             name_on_page=shop["name"],
             country_on_page=shop["country"],
-            auto_commit=False,
         )
         if detail_fields is not None:
             database.upsert_shop_detail(
@@ -114,8 +112,7 @@ def _save_shop_snapshot(
                 shop_id=shop_id,
                 snapshot_id=snapshot_id,
                 is_wayback=is_wayback,
-                auto_commit=False,
-                **detail_fields,
+                fields=detail_fields,
             )
 
 
@@ -151,12 +148,13 @@ def scrape_live(
         raise typer.Exit(code=1)
 
     today = date.today().isoformat()
-    snapshot_id = database.insert_snapshot(
-        conn,
-        snapshot_date=today,
-        list_page_url=LIST_URL,
-        wayback_timestamp=None,
-    )
+    with conn:
+        snapshot_id = database.insert_snapshot(
+            conn,
+            snapshot_date=today,
+            list_page_url=LIST_URL,
+            wayback_timestamp=None,
+        )
     typer.echo(f"Inserted snapshot id={snapshot_id} ({today})")
 
     n = len(shops)
@@ -248,12 +246,13 @@ def scrape_historical(
             if verbose:
                 typer.echo(f"  {len(shops)} shops", nl=False)
 
-            snapshot_id = database.insert_snapshot(
-                conn,
-                snapshot_date=snap_date,
-                list_page_url=build_wayback_url(ts, LIST_URL),
-                wayback_timestamp=ts,
-            )
+            with conn:
+                snapshot_id = database.insert_snapshot(
+                    conn,
+                    snapshot_date=snap_date,
+                    list_page_url=build_wayback_url(ts, LIST_URL),
+                    wayback_timestamp=ts,
+                )
 
             failed = 0
             skipped_empty = 0

@@ -62,9 +62,7 @@ def test_save_shop_snapshot_writes_ranking_and_detail(
         detail_fields=detail_fields,
     )
 
-    mock_get_or_create_shop.assert_called_once_with(
-        conn, slug="shop-a", auto_commit=False
-    )
+    mock_get_or_create_shop.assert_called_once_with(conn, slug="shop-a")
     mock_insert_ranking.assert_called_once()
     mock_upsert_shop_detail.assert_called_once()
 
@@ -92,8 +90,6 @@ def test_save_shop_snapshot_skips_detail_write_when_detail_is_none(
         detail_fields=None,
     )
 
-    mock_get_or_create_shop.assert_called_once_with(
-        conn, slug="shop-a", auto_commit=False
-    )
+    mock_get_or_create_shop.assert_called_once_with(conn, slug="shop-a")
     mock_insert_ranking.assert_called_once()
     mock_upsert_shop_detail.assert_not_called()
