@@ -136,14 +136,14 @@ The scrape workflow requires these repository secrets:
 
 - `DOCKERHUB_TOKEN`: Docker Hub access token with permission to push `ngshiheng/coffeedb`
 - `KAGGLE_USERNAME`: Kaggle account username
-- `KAGGLE_API_TOKEN`: Kaggle API token passed to the Kaggle CLI as both `KAGGLE_API_TOKEN` and legacy `KAGGLE_KEY`
+- `KAGGLE_API_TOKEN`: Kaggle API token passed to the current Kaggle CLI
 - `RAILWAY_TOKEN`: Railway API token
 - `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_ID`: the existing Railway Datasette service identifiers
 
-Before the first scheduled publication:
+Initial setup:
 
 1. Create the Docker Hub repository `ngshiheng/coffeedb`.
-2. Run `Scrape latest data` manually once with `create_kaggle_dataset: true`. This creates the Kaggle dataset from the generated exports. Later runs should leave this input as `false` so they publish new versions.
+2. Create the Kaggle dataset once with `make kaggle-export` followed by `make kaggle-create`. Later runs publish new versions automatically.
 3. Create and successfully deploy a Railway service configured to use `ngshiheng/coffeedb:latest`.
 4. Add the secrets above in the repository settings.
 
