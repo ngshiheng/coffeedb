@@ -136,7 +136,7 @@ The scrape workflow requires these repository secrets:
 
 - `DOCKERHUB_TOKEN`: Docker Hub access token with permission to push `ngshiheng/coffeedb`
 - `KAGGLE_USERNAME`: Kaggle account username
-- `KAGGLE_API_TOKEN`: Kaggle API token; the workflow maps it to the CLI's `KAGGLE_KEY` environment variable
+- `KAGGLE_API_TOKEN`: Kaggle API token passed to the Kaggle CLI as both `KAGGLE_API_TOKEN` and legacy `KAGGLE_KEY`
 - `RAILWAY_TOKEN`: Railway API token
 - `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_ID`: the existing Railway Datasette service identifiers
 
