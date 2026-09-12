@@ -5,6 +5,17 @@ on:
         - cron: "0 0 * * 0"
 
     workflow_dispatch:
+        inputs:
+            create_kaggle_dataset:
+                description: "Create the Kaggle dataset instead of publishing a new version"
+                type: boolean
+                required: false
+                default: false
+
+env:
+    DB_PATH: data/coffee.db
+    ARTIFACT_NAME: coffee-db
+    IMAGE_NAME: ngshiheng/coffeedb
 
 concurrency:
     group: coffee-db-artifact
@@ -17,6 +28,7 @@ jobs:
     scrape:
         needs: test
         runs-on: ubuntu-latest
+        timeout-minutes: 90
         permissions:
             actions: read
             contents: read
@@ -28,13 +40,13 @@ jobs:
                   python-version: "3.14"
             - name: Set up uv
               uses: astral-sh/setup-uv@v10.0.1
-            - name: Find latest coffeedb artifact run id
+            - name: Find latest coffee-db artifact run id
               env:
                   GH_TOKEN: ${{ github.token }}
               run: |
                   set -euo pipefail
                   run_id=$(gh api \
-                    "repos/${{ github.repository }}/actions/artifacts?name=coffee-db&per_page=1" \
+                    "repos/${{ github.repository }}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1" \
                     --jq '.artifacts[0].workflow_run.id // empty')
 
                   if [[ -n "$run_id" ]]; then
@@ -44,35 +56,198 @@ jobs:
                     echo "No previous coffee-db artifact found. Starting from a new database."
                   fi
             - name: Download previous database artifact
+              if: ${{ env.artifact_run_id != '' }}
               uses: actions/download-artifact@v8
               with:
-                  name: coffee-db
+                  name: ${{ env.ARTIFACT_NAME }}
                   path: data/
                   run-id: ${{ env.artifact_run_id }}
                   github-token: ${{ github.token }}
-              continue-on-error: true
             - name: Install dependencies
               run: uv sync
             - name: Scrape live ranking data
               run: |
-                  uv run coffeedb init --db data/coffee.db
-                  uv run coffeedb scrape live --db data/coffee.db
-            - name: Cleanup empty and sparse details
-              run: |
-                  bash scripts/cleanup-empty-details.sh data/coffee.db
-                  bash scripts/repair-sparse-details.sh data/coffee.db
+                  set -euo pipefail
+                  uv run coffeedb init --db "$DB_PATH"
+                  uv run coffeedb scrape live --db "$DB_PATH"
             - name: Validate DB row count
               run: |
-                  COUNT=$(sqlite3 data/coffee.db "SELECT COUNT(*) FROM shops;")
-                  echo "Row count: $COUNT"
-                  if [ "$COUNT" -lt 10 ]; then
-                    echo "ERROR: Row count $COUNT is below threshold. Aborting."
+                  set -euo pipefail
+                  if [ ! -f "$DB_PATH" ]; then
+                    echo "ERROR: $DB_PATH does not exist."
+                    exit 1
+                  fi
+
+                  INTEGRITY=$(sqlite3 "$DB_PATH" "PRAGMA integrity_check;")
+                  if [ "$INTEGRITY" != "ok" ]; then
+                    echo "ERROR: SQLite integrity check failed: $INTEGRITY"
+                    exit 1
+                  fi
+
+                  SNAPSHOT_ID=$(sqlite3 "$DB_PATH" "SELECT id FROM snapshots ORDER BY snapshot_date DESC LIMIT 1;")
+                  if [ -z "$SNAPSHOT_ID" ]; then
+                    echo "ERROR: no snapshots found in database."
+                    exit 1
+                  fi
+                  SNAPSHOT_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM rankings WHERE snapshot_id = $SNAPSHOT_ID;")
+                  DISTINCT_RANK_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(DISTINCT rank) FROM rankings WHERE snapshot_id = $SNAPSHOT_ID;")
+                  MIN_RANK=$(sqlite3 "$DB_PATH" "SELECT MIN(rank) FROM rankings WHERE snapshot_id = $SNAPSHOT_ID;")
+                  echo "Latest snapshot: $SNAPSHOT_ID"
+                  echo "Latest ranking rows: $SNAPSHOT_COUNT"
+                  echo "Distinct ranks: $DISTINCT_RANK_COUNT"
+                  echo "Minimum rank: $MIN_RANK"
+
+                  if [ "$SNAPSHOT_COUNT" -lt 50 ]; then
+                    echo "ERROR: latest snapshot has fewer than 50 ranking rows."
+                    exit 1
+                  fi
+                  if [ "$SNAPSHOT_COUNT" -ne "$DISTINCT_RANK_COUNT" ]; then
+                    echo "ERROR: latest snapshot contains duplicate ranks."
+                    exit 1
+                  fi
+                  if [ "$MIN_RANK" -ne 1 ]; then
+                    echo "ERROR: latest snapshot does not start at rank 1."
+                    exit 1
+                  fi
+
+                  SHOP_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM shops;")
+                  echo "Total shops: $SHOP_COUNT"
+                  if [ "$SHOP_COUNT" -lt 10 ]; then
+                    echo "ERROR: total shop count $SHOP_COUNT is below threshold."
                     exit 1
                   fi
             - name: Upload database artifact
               uses: actions/upload-artifact@v7
               with:
-                  name: coffee-db
-                  path: data/coffee.db
+                  name: ${{ env.ARTIFACT_NAME }}
+                  path: ${{ env.DB_PATH }}
                   if-no-files-found: error
                   retention-days: 90
+            - name: Validate publication credentials
+              env:
+                  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+                  KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+                  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+              run: |
+                  set -euo pipefail
+                  for secret_name in DOCKERHUB_TOKEN KAGGLE_USERNAME KAGGLE_API_TOKEN; do
+                    if [[ -z "${!secret_name}" ]]; then
+                      echo "ERROR: $secret_name is not configured in repository secrets."
+                      exit 1
+                    fi
+                  done
+            - name: Install Datasette
+              run: pipx install datasette
+            - name: Install Kaggle CLI
+              run: pipx install kaggle
+            - name: Login to Docker Hub
+              uses: docker/login-action@v4
+              with:
+                  username: ngshiheng
+                  password: ${{ secrets.DOCKERHUB_TOKEN }}
+            - name: Build Datasette images
+              run: make DB_PATH="$DB_PATH" IMAGE_NAME="$IMAGE_NAME" docker-build
+            - name: Push Datasette images
+              run: make IMAGE_NAME="$IMAGE_NAME" docker-push
+            - name: Export Kaggle CSVs
+              run: make DB_PATH="$DB_PATH" kaggle-export
+            - name: Verify Kaggle CSVs
+              run: |
+                  set -euo pipefail
+                  for file in kaggle/snapshots.csv kaggle/shops.csv kaggle/latest_ranking.csv kaggle/ranking_history.csv; do
+                    if [ ! -s "$file" ]; then
+                      echo "ERROR: expected non-empty export is missing: $file"
+                      exit 1
+                    fi
+                    LINE_COUNT=$(wc -l < "$file")
+                    echo "$file: $LINE_COUNT line(s)"
+                    if [ "$LINE_COUNT" -lt 2 ]; then
+                      echo "ERROR: export contains only a header: $file"
+                      exit 1
+                    fi
+                  done
+            - name: Create Kaggle dataset (first run)
+              if: ${{ inputs.create_kaggle_dataset }}
+              env:
+                  KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+                  KAGGLE_KEY: ${{ secrets.KAGGLE_API_TOKEN }}
+              run: make kaggle-create
+            - name: Upload dataset version to Kaggle
+              if: ${{ !inputs.create_kaggle_dataset }}
+              env:
+                  KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+                  KAGGLE_KEY: ${{ secrets.KAGGLE_API_TOKEN }}
+              run: make kaggle-push
+
+    deploy:
+        needs: scrape
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        permissions:
+            contents: read
+        env:
+            RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+            RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+            RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+            RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+            RAILWAY_API_URL: https://backboard.railway.app/graphql/v2
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+            - name: Get latest deployment ID
+              id: get-deployment
+              run: |
+                  set -euo pipefail
+                  for secret_name in RAILWAY_TOKEN RAILWAY_PROJECT_ID RAILWAY_ENVIRONMENT_ID RAILWAY_SERVICE_ID; do
+                    if [[ -z "${!secret_name}" ]]; then
+                      echo "ERROR: $secret_name is not configured in repository secrets."
+                      exit 1
+                    fi
+                  done
+
+                  RESPONSE=$(curl --fail-with-body -sS --retry 5 --retry-all-errors --retry-delay 2 -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "Authorization: Bearer $RAILWAY_TOKEN" \
+                    -H "User-Agent: GitHub-Actions" \
+                    --url "$RAILWAY_API_URL" \
+                    -d '{
+                      "query": "query deployments { deployments(last: 10, input: { projectId: \"'"$RAILWAY_PROJECT_ID"'\", environmentId: \"'"$RAILWAY_ENVIRONMENT_ID"'\", serviceId: \"'"$RAILWAY_SERVICE_ID"'\" }) { edges { node { id status } } } }",
+                      "operationName": "deployments"
+                    }')
+                  echo "$RESPONSE"
+
+                  if echo "$RESPONSE" | jq -e '(.errors // []) | length > 0' >/dev/null; then
+                    echo "ERROR: Railway API returned errors."
+                    exit 1
+                  fi
+
+                  DEPLOYMENT_ID=$(echo "$RESPONSE" | jq -r '[.data.deployments.edges[].node | select(.status != "REMOVED")][0].id // empty')
+                  if [[ -z "$DEPLOYMENT_ID" ]]; then
+                    echo "ERROR: no active Railway deployment found. Create an initial successful deployment first."
+                    exit 1
+                  fi
+                  echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+            - name: Trigger Railway redeployment
+              run: |
+                  set -euo pipefail
+                  RESPONSE=$(curl --fail-with-body -sS --retry 5 --retry-all-errors --retry-delay 2 -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "Authorization: Bearer $RAILWAY_TOKEN" \
+                    -H "User-Agent: GitHub-Actions" \
+                    --url "$RAILWAY_API_URL" \
+                    -d "{
+                      \"query\": \"mutation { deploymentRedeploy(id: \\\"${{ steps.get-deployment.outputs.deployment_id }}\\\", usePreviousImageTag: true) { id status } }\"
+                    }")
+                  echo "$RESPONSE"
+
+                  if echo "$RESPONSE" | jq -e '(.errors // []) | length > 0' >/dev/null; then
+                    echo "ERROR: Railway API returned errors during redeploy."
+                    exit 1
+                  fi
+
+                  NEW_DEPLOYMENT_ID=$(echo "$RESPONSE" | jq -r '.data.deploymentRedeploy.id // empty')
+                  if [[ -z "$NEW_DEPLOYMENT_ID" ]]; then
+                    echo "ERROR: Railway redeploy did not return a deployment id."
+                    exit 1
+                  fi
+                  echo "Redeploy accepted: $NEW_DEPLOYMENT_ID"

@@ -8,6 +8,10 @@ on:
                 type: boolean
                 default: false
 
+env:
+    DB_PATH: data/coffee.db
+    ARTIFACT_NAME: coffee-db
+
 # Must use the same group as scrape.yml so a manual backfill can't race a
 # scheduled live run and overwrite the shared DB artifact.
 concurrency:
@@ -38,7 +42,7 @@ jobs:
               run: |
                   set -euo pipefail
                   run_id=$(gh api \
-                    "repos/${{ github.repository }}/actions/artifacts?name=coffee-db&per_page=1" \
+                    "repos/${{ github.repository }}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1" \
                     --jq '.artifacts[0].workflow_run.id // empty')
 
                   if [[ -n "$run_id" ]]; then
@@ -48,22 +52,33 @@ jobs:
                     echo "No previous coffee-db artifact found. Starting from a new database."
                   fi
             - name: Download previous database artifact
+              if: ${{ env.artifact_run_id != '' }}
               uses: actions/download-artifact@v8
               with:
-                  name: coffee-db
+                  name: ${{ env.ARTIFACT_NAME }}
                   path: data/
                   run-id: ${{ env.artifact_run_id }}
                   github-token: ${{ github.token }}
-              continue-on-error: true
             - name: Install dependencies
               run: uv sync
             - name: Backfill historical Wayback snapshots
               run: |
-                  uv run coffeedb init --db data/coffee.db
-                  uv run coffeedb scrape historical --db data/coffee.db ${{ inputs.fresh && '--fresh' || '' }}
+                  set -euo pipefail
+                  uv run coffeedb init --db "$DB_PATH"
+                  uv run coffeedb scrape historical --db "$DB_PATH" ${{ inputs.fresh && '--fresh' || '' }}
             - name: Validate DB row count
               run: |
-                  COUNT=$(sqlite3 data/coffee.db "SELECT COUNT(*) FROM snapshots;")
+                  set -euo pipefail
+                  if [ ! -f "$DB_PATH" ]; then
+                    echo "ERROR: $DB_PATH does not exist."
+                    exit 1
+                  fi
+                  INTEGRITY=$(sqlite3 "$DB_PATH" "PRAGMA integrity_check;")
+                  if [ "$INTEGRITY" != "ok" ]; then
+                    echo "ERROR: SQLite integrity check failed: $INTEGRITY"
+                    exit 1
+                  fi
+                  COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM snapshots;")
                   echo "Snapshot count: $COUNT"
                   if [ "$COUNT" -lt 1 ]; then
                     echo "ERROR: No snapshots found in DB. Aborting."
@@ -72,7 +87,7 @@ jobs:
             - name: Upload database artifact
               uses: actions/upload-artifact@v7
               with:
-                  name: coffee-db
-                  path: data/coffee.db
+                  name: ${{ env.ARTIFACT_NAME }}
+                  path: ${{ env.DB_PATH }}
                   if-no-files-found: error
                   retention-days: 90
