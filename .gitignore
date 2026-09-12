@@ -13,5 +13,8 @@ wheels/
 *.db
 *.sqlite
 
+# Generated Kaggle exports
+kaggle/*.csv
+
 # Cache
 .cache

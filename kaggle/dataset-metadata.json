@@ -1,0 +1,79 @@
+{
+    "title": "The World's 100 Best Coffee Shops",
+    "id": "ngshiheng/worlds-100-best-coffee-shops",
+    "subtitle": "Historical rankings and shop details, updated weekly.",
+    "description": "Historical snapshots of The World's 100 Best Coffee Shops ranking. The dataset includes the latest ranking, every captured ranking row, the stable shop list, and scrape snapshot metadata.\n\nThe data is collected from https://theworlds100bestcoffeeshops.com. See the source website for the authoritative ranking and shop information.",
+    "licenses": [
+        {
+            "name": "CC-BY-NC-4.0"
+        }
+    ],
+    "keywords": ["coffee", "restaurants", "rankings", "travel", "historical"],
+    "resources": [
+        {
+            "path": "latest_ranking.csv",
+            "description": "The most recent captured ranking with parsed shop details.",
+            "schema": {
+                "fields": [
+                    {"name": "snapshot_date", "type": "date"},
+                    {"name": "rank", "type": "number"},
+                    {"name": "name", "type": "string"},
+                    {"name": "slug", "type": "string"},
+                    {"name": "city", "type": "string"},
+                    {"name": "country", "type": "string"},
+                    {"name": "address", "type": "string"},
+                    {"name": "website", "type": "string"},
+                    {"name": "instagram", "type": "string"},
+                    {"name": "description", "type": "string"},
+                    {"name": "image_urls", "type": "string"},
+                    {"name": "detail_page_url", "type": "string"},
+                    {"name": "is_wayback", "type": "boolean"}
+                ]
+            }
+        },
+        {
+            "path": "ranking_history.csv",
+            "description": "Every captured shop ranking row across all snapshots.",
+            "schema": {
+                "fields": [
+                    {"name": "snapshot_date", "type": "date"},
+                    {"name": "wayback_timestamp", "type": "string"},
+                    {"name": "rank", "type": "number"},
+                    {"name": "name", "type": "string"},
+                    {"name": "slug", "type": "string"},
+                    {"name": "city", "type": "string"},
+                    {"name": "country", "type": "string"},
+                    {"name": "address", "type": "string"},
+                    {"name": "website", "type": "string"},
+                    {"name": "instagram", "type": "string"},
+                    {"name": "description", "type": "string"},
+                    {"name": "image_urls", "type": "string"},
+                    {"name": "detail_page_url", "type": "string"},
+                    {"name": "is_wayback", "type": "boolean"}
+                ]
+            }
+        },
+        {
+            "path": "shops.csv",
+            "description": "Stable shop identity records keyed by URL-derived slug.",
+            "schema": {
+                "fields": [
+                    {"name": "slug", "type": "string"},
+                    {"name": "created_at", "type": "datetime"}
+                ]
+            }
+        },
+        {
+            "path": "snapshots.csv",
+            "description": "Captured ranking snapshots and their source URLs.",
+            "schema": {
+                "fields": [
+                    {"name": "snapshot_date", "type": "date"},
+                    {"name": "list_page_url", "type": "string"},
+                    {"name": "wayback_timestamp", "type": "string"},
+                    {"name": "scraped_at", "type": "datetime"}
+                ]
+            }
+        }
+    ]
+}

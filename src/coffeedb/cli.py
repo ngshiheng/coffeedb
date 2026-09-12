@@ -21,7 +21,7 @@ from coffeedb.constants import (
 )
 from coffeedb.db import ShopDetailFields
 
-_DB_OPTION = typer.Option("coffee.db", "--db", help="Path to the SQLite database.")
+_DB_OPTION = typer.Option("data/coffee.db", "--db", help="Path to the SQLite database.")
 
 app = typer.Typer(
     name="coffeedb",
