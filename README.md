@@ -11,7 +11,12 @@ graph TB
 			workflow[scrape.yml]
 		end
 		subgraph Artifacts
-			db[(coffee.db)]
+			db[(data/coffee.db)]
+		end
+		subgraph Publication
+			docker[Docker Hub / Datasette]
+			kaggle[Kaggle CSV dataset]
+			railway[Railway instance]
 		end
 	end
 	subgraph Source Website
@@ -21,6 +26,9 @@ graph TB
 	site --> |1: Fetch ranking and detail pages| workflow
 	workflow --> |2: Save snapshot data| db
 	workflow --> |3: Upload artifact| db
+	workflow --> |4: Build and push image| docker
+	workflow --> |5: Export and version CSVs| kaggle
+	docker --> |6: Redeploy latest image| railway
 ```
 
 ## Quick start
@@ -36,19 +44,19 @@ This project uses uv and requires Python 3.13 or newer.
 ### Initialize a database
 
 ```bash
-uv run coffeedb init --db coffee.db
+uv run coffeedb init --db data/coffee.db
 ```
 
 ### Scrape the live site
 
 ```bash
-uv run coffeedb scrape live --db coffee.db
+uv run coffeedb scrape live --db data/coffee.db
 ```
 
 ### Scrape historical snapshots from Wayback
 
 ```bash
-uv run coffeedb scrape historical --db coffee.db
+uv run coffeedb scrape historical --db data/coffee.db
 ```
 
 ## CLI overview
@@ -100,16 +108,20 @@ Environment variables:
 
 ## Automation
 
-GitHub Actions workflow [.github/workflows/scrape.yml](.github/workflows/scrape.yml) follows the same orchestration style as passportindexdb: path-filtered push triggers, manual dispatch, and weekly scheduled scraping.
+GitHub Actions workflow [.github/workflows/scrape.yml](.github/workflows/scrape.yml) runs weekly or manually and follows the same publication pattern as passportindexdb.
 
 Workflow behavior:
 
-- restores the latest `coffeedb-sqlite` artifact when available (so snapshots accumulate)
+- restores the latest `coffee-db` artifact when available (so snapshots accumulate)
 - sets up Python and `uv`
 - runs `uv run coffeedb init --db data/coffee.db`
 - runs `uv run coffeedb scrape live --db data/coffee.db`
-- runs cleanup scripts for empty/sparse detail rows
-- uploads `data/coffee.db` as a workflow artifact (`coffeedb-sqlite`)
+- validates SQLite integrity and latest snapshot rank coverage
+- uploads `data/coffee.db` as a workflow artifact (`coffee-db`)
+- builds and pushes `ngshiheng/coffeedb:latest` and a UTC date-tagged Datasette image to Docker Hub
+- exports `latest_ranking.csv`, `ranking_history.csv`, `shops.csv`, and `snapshots.csv`
+- publishes a new version of the Kaggle dataset
+- redeploys the configured Railway Datasette service
 
 Run it manually from Actions:
 
@@ -118,6 +130,25 @@ Run it manually from Actions:
 
 Local commands stay the source of truth for scraper behavior; the workflow simply automates the same CLI entrypoints.
 
+### Publication setup
+
+The scrape workflow requires these repository secrets:
+
+- `DOCKERHUB_TOKEN`: Docker Hub access token with permission to push `ngshiheng/coffeedb`
+- `KAGGLE_USERNAME`: Kaggle account username
+- `KAGGLE_API_TOKEN`: Kaggle API token; the workflow maps it to the CLI's `KAGGLE_KEY` environment variable
+- `RAILWAY_TOKEN`: Railway API token
+- `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_ID`: the existing Railway Datasette service identifiers
+
+Before the first scheduled publication:
+
+1. Create the Docker Hub repository `ngshiheng/coffeedb`.
+2. Run `Scrape latest data` manually once with `create_kaggle_dataset: true`. This creates the Kaggle dataset from the generated exports. Later runs should leave this input as `false` so they publish new versions.
+3. Create and successfully deploy a Railway service configured to use `ngshiheng/coffeedb:latest`.
+4. Add the secrets above in the repository settings.
+
+The publication stage fails when any publication secret is missing. The validated SQLite artifact is uploaded before publication, so scraping history remains available while credentials are being configured. GitHub Actions artifacts retain the database for 90 days; they are not a permanent backup.
+
 ## Project structure
 
 ```text
@@ -125,6 +156,7 @@ src/coffeedb/
 	cli.py          Typer commands and scrape/query orchestration
 	constants.py    Shared URLs, timeouts, and helper URL builders
 	db.py           SQLite schema and persistence helpers
+	kaggle.py       Current and historical CSV export views
 	scraper.py      HTML parsing for list and detail pages
 	wayback.py      CDX lookup and archived page fetching
 ```
