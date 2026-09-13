@@ -1,0 +1,858 @@
+title: World's 100 Best Coffee Shops
+description_html: |-
+  <p>Explore the current top 100, find a coffee shop, and follow ranking changes over time.</p>
+  <p>Monthly scrapes are observations of the site. Historical captures can have incomplete detail pages, so check the capture coverage before interpreting changes.</p>
+source: The World's 100 Best Coffee Shops
+source_url: https://theworlds100bestcoffeeshops.com
+about: coffeedb historical ranking archive
+about_url: https://github.com/ngshiheng/coffeedb
+
+databases:
+  coffee:
+    description_html: |-
+      <p>This database records observations of The World's 100 Best Coffee Shops top 100.</p>
+      <p>Complete 100-row captures are used for comparison queries. Annual editions are inferred automatically as the first complete capture in a year with a ranking change compared with the previous complete capture. This is a useful heuristic, not an official publisher-provided edition marker.</p>
+    queries:
+      current_top_100:
+        title: Current top 100
+        description: Browse the latest captured top 100. Leave country and city blank to see every shop. This is the latest observation, not necessarily a new annual edition.
+        hide_sql: true
+        params:
+          - country
+          - city
+        sql: |-
+          WITH snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          current_snapshot AS (
+            SELECT * FROM snapshot_stats ORDER BY snapshot_date DESC LIMIT 1
+          )
+          SELECT
+            cs.snapshot_date,
+            cs.source,
+            cs.ranked_shops,
+            CASE WHEN cs.ranked_shops = 100 AND cs.distinct_ranks = 100 AND cs.lowest_rank = 1 AND cs.highest_rank = 100 THEN 'complete top 100' ELSE 'partial ranking' END AS coverage_status,
+            r.rank,
+            COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name,
+            sh.slug,
+            COALESCE(NULLIF(sd.city, ''), '') AS city,
+            COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country,
+            sd.website,
+            sd.instagram,
+            r.detail_page_url,
+            CASE WHEN sd.id IS NULL THEN 0 ELSE 1 END AS detail_available
+          FROM current_snapshot cs
+          JOIN rankings r ON r.snapshot_id = cs.id
+          JOIN shops sh ON sh.id = r.shop_id
+          LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          WHERE (:country IS NULL OR :country = '' OR LOWER(COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), '')) LIKE '%' || LOWER(:country) || '%')
+            AND (:city IS NULL OR :city = '' OR LOWER(COALESCE(sd.city, '')) LIKE '%' || LOWER(:city) || '%')
+          ORDER BY r.rank
+
+      find_current_shop:
+        title: Find a coffee shop
+        description: Search the latest captured top 100 by shop name or slug, with optional city and country filters. Use the slug from the results to open shop history.
+        hide_sql: true
+        params:
+          - search
+          - country
+          - city
+        sql: |-
+          WITH snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          current_snapshot AS (
+            SELECT * FROM snapshot_stats ORDER BY snapshot_date DESC LIMIT 1
+          )
+          SELECT
+            cs.snapshot_date,
+            cs.source,
+            r.rank,
+            COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name,
+            sh.slug,
+            COALESCE(NULLIF(sd.city, ''), '') AS city,
+            COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country,
+            sd.website,
+            sd.instagram,
+            r.detail_page_url
+          FROM current_snapshot cs
+          JOIN rankings r ON r.snapshot_id = cs.id
+          JOIN shops sh ON sh.id = r.shop_id
+          LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          WHERE (:search IS NULL OR :search = '' OR LOWER(COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug)) LIKE '%' || LOWER(:search) || '%' OR LOWER(sh.slug) LIKE '%' || LOWER(:search) || '%')
+            AND (:country IS NULL OR :country = '' OR LOWER(COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), '')) LIKE '%' || LOWER(:country) || '%')
+            AND (:city IS NULL OR :city = '' OR LOWER(COALESCE(sd.city, '')) LIKE '%' || LOWER(:city) || '%')
+          ORDER BY r.rank
+          LIMIT 100
+
+      shop_history:
+        title: Café ranking history
+        description: Search for a café by name or slug to see how its rank changed over time. Unchanged monthly checks are hidden; the first observation, every rank change, and one observation when the calendar year changes are kept. Leave search blank for no results.
+        hide_sql: true
+        params:
+          - search
+        sql: |-
+          WITH matching_shops AS (
+            SELECT DISTINCT sh.id
+            FROM shops sh
+            LEFT JOIN rankings r ON r.shop_id = sh.id
+            LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+            WHERE :search IS NOT NULL
+              AND :search != ''
+              AND (
+                LOWER(sh.slug) LIKE '%' || LOWER(:search) || '%'
+                OR LOWER(COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug)) LIKE '%' || LOWER(:search) || '%'
+              )
+          ),
+          snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          complete_snapshots AS (
+            SELECT *
+            FROM snapshot_stats
+            WHERE ranked_shops = 100
+              AND distinct_ranks = 100
+              AND lowest_rank = 1
+              AND highest_rank = 100
+          ),
+          rank_history AS (
+            SELECT
+              sn.snapshot_date,
+              sn.wayback_timestamp,
+              ss.source,
+              ss.ranked_shops,
+              ss.detail_rows,
+              r.rank,
+              LAG(r.rank) OVER (PARTITION BY sh.id ORDER BY sn.snapshot_date) AS previous_rank,
+              LAG(sn.snapshot_date) OVER (PARTITION BY sh.id ORDER BY sn.snapshot_date) AS previous_snapshot_date,
+              COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name,
+              sh.slug,
+              COALESCE(NULLIF(sd.city, ''), '') AS city,
+              COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country,
+              sd.website,
+              sd.instagram,
+              r.detail_page_url,
+              CASE WHEN sd.id IS NULL THEN 0 ELSE 1 END AS detail_available
+            FROM rankings r
+            JOIN snapshots sn ON sn.id = r.snapshot_id
+            JOIN snapshot_stats ss ON ss.id = sn.id
+            JOIN complete_snapshots cs ON cs.id = sn.id
+            JOIN matching_shops ms ON ms.id = r.shop_id
+            JOIN shops sh ON sh.id = r.shop_id
+            LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          )
+          SELECT
+            snapshot_date,
+            wayback_timestamp,
+            source,
+            ranked_shops,
+            detail_rows,
+            rank,
+            previous_rank,
+            previous_snapshot_date,
+            previous_rank - rank AS rank_change,
+            CASE WHEN previous_rank IS NULL THEN 'first observation' WHEN previous_rank != rank AND SUBSTR(previous_snapshot_date, 1, 4) != SUBSTR(snapshot_date, 1, 4) THEN 'annual rank change' WHEN previous_rank > rank THEN 'climbed' WHEN previous_rank < rank THEN 'dropped' WHEN SUBSTR(previous_snapshot_date, 1, 4) != SUBSTR(snapshot_date, 1, 4) THEN 'annual observation' ELSE 'unchanged' END AS observation_type,
+            name,
+            slug,
+            city,
+            country,
+            website,
+            instagram,
+            detail_page_url,
+            detail_available
+          FROM rank_history
+          WHERE previous_rank IS NULL
+            OR previous_rank != rank
+            OR SUBSTR(previous_snapshot_date, 1, 4) != SUBSTR(snapshot_date, 1, 4)
+          ORDER BY slug, snapshot_date
+
+      available_captures:
+        title: Available captures and coverage
+        description: See every captured ranking observation, its ranking and detail coverage, and the annual editions inferred from complete captures. Use this before interpreting historical comparisons.
+        hide_sql: true
+        sql: |-
+          WITH snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              s.list_page_url,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          complete_snapshots AS (
+            SELECT * FROM snapshot_stats
+            WHERE ranked_shops = 100 AND distinct_ranks = 100 AND lowest_rank = 1 AND highest_rank = 100
+          ),
+          ordered_complete AS (
+            SELECT
+              c.*,
+              LAG(c.id) OVER (ORDER BY c.snapshot_date) AS previous_id,
+              LAG(c.snapshot_date) OVER (ORDER BY c.snapshot_date) AS previous_snapshot_date
+            FROM complete_snapshots c
+          ),
+          change_counts AS (
+            SELECT
+              oc.id,
+              oc.snapshot_date,
+              oc.source,
+              oc.ranked_shops,
+              oc.detail_rows,
+              oc.previous_id,
+              oc.previous_snapshot_date,
+              SUM(CASE WHEN oc.previous_id IS NULL OR previous_rows.shop_id IS NULL OR previous_rows.rank != current_rows.rank THEN 1 ELSE 0 END) AS changed_rows
+            FROM ordered_complete oc
+            JOIN rankings current_rows ON current_rows.snapshot_id = oc.id
+            LEFT JOIN rankings previous_rows ON previous_rows.snapshot_id = oc.previous_id AND previous_rows.shop_id = current_rows.shop_id
+            GROUP BY oc.id, oc.snapshot_date, oc.source, oc.ranked_shops, oc.detail_rows, oc.previous_id, oc.previous_snapshot_date
+          ),
+          annual_candidates AS (
+            SELECT
+              cc.*,
+              SUBSTR(cc.snapshot_date, 1, 4) AS edition_year,
+              ROW_NUMBER() OVER (PARTITION BY SUBSTR(cc.snapshot_date, 1, 4) ORDER BY cc.snapshot_date) AS edition_position
+            FROM change_counts cc
+            WHERE cc.previous_id IS NULL OR cc.changed_rows > 0
+          ),
+          annual_editions AS (
+            SELECT * FROM annual_candidates WHERE edition_position = 1
+          )
+          SELECT
+            ss.snapshot_date,
+            ss.source,
+            ss.wayback_timestamp,
+            ss.list_page_url,
+            ss.ranked_shops,
+            ss.detail_rows,
+            ROUND(100.0 * ss.detail_rows / NULLIF(ss.ranked_shops, 0), 1) AS detail_coverage_pct,
+            CASE WHEN ss.ranked_shops = 100 AND ss.distinct_ranks = 100 AND ss.lowest_rank = 1 AND ss.highest_rank = 100 THEN 'complete top 100' ELSE 'partial ranking' END AS ranking_status,
+            ae.edition_year AS inferred_annual_edition,
+            ae.changed_rows AS changed_rows_from_previous_complete,
+            CASE WHEN ae.previous_id IS NULL AND ae.id IS NOT NULL THEN 'initial complete capture' WHEN ae.id IS NOT NULL THEN 'first complete capture in year with a ranking change' ELSE NULL END AS annual_inference
+          FROM snapshot_stats ss
+          LEFT JOIN annual_editions ae ON ae.id = ss.id
+          ORDER BY ss.snapshot_date DESC
+
+      top_100_on_date:
+        title: Top 100 on a captured date
+        description: Browse the ranking captured on an exact YYYY-MM-DD date. Leave the date blank for the latest observation. This does not silently substitute a different capture from the same year.
+        hide_sql: true
+        params:
+          - snapshot_date
+          - country
+          - city
+        sql: |-
+          WITH snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          target_snapshot AS (
+            SELECT * FROM snapshot_stats
+            WHERE snapshot_date = COALESCE(NULLIF(:snapshot_date, ''), (SELECT MAX(snapshot_date) FROM snapshot_stats))
+            LIMIT 1
+          )
+          SELECT
+            ts.snapshot_date,
+            ts.source,
+            ts.ranked_shops,
+            ts.detail_rows,
+            ROUND(100.0 * ts.detail_rows / NULLIF(ts.ranked_shops, 0), 1) AS detail_coverage_pct,
+            CASE WHEN ts.ranked_shops = 100 AND ts.distinct_ranks = 100 AND ts.lowest_rank = 1 AND ts.highest_rank = 100 THEN 'complete top 100' ELSE 'partial ranking' END AS ranking_status,
+            r.rank,
+            COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name,
+            sh.slug,
+            COALESCE(NULLIF(sd.city, ''), '') AS city,
+            COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country,
+            sd.website,
+            sd.instagram,
+            r.detail_page_url,
+            CASE WHEN sd.id IS NULL THEN 0 ELSE 1 END AS detail_available
+          FROM target_snapshot ts
+          JOIN rankings r ON r.snapshot_id = ts.id
+          JOIN shops sh ON sh.id = r.shop_id
+          LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          WHERE (:country IS NULL OR :country = '' OR LOWER(COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), '')) LIKE '%' || LOWER(:country) || '%')
+            AND (:city IS NULL OR :city = '' OR LOWER(COALESCE(sd.city, '')) LIKE '%' || LOWER(:city) || '%')
+          ORDER BY r.rank
+
+      changes_since_previous_check:
+        title: Recent ranking changes
+        description: Show changes across complete observations, not just the latest check. Unchanged monthly checks are omitted; rank changes and observations at calendar-year boundaries are kept. Entries and exits are labelled observed entry or observed exit rather than annual debut or dropout.
+        hide_sql: true
+        params:
+          - change_type
+          - search
+          - country
+        sql: |-
+          WITH snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          complete_snapshots AS (
+            SELECT * FROM snapshot_stats
+            WHERE ranked_shops = 100 AND distinct_ranks = 100 AND lowest_rank = 1 AND highest_rank = 100
+          ),
+          ordered_complete AS (
+            SELECT
+              c.*,
+              LAG(c.id) OVER (ORDER BY c.snapshot_date) AS previous_id,
+              LAG(c.snapshot_date) OVER (ORDER BY c.snapshot_date) AS previous_snapshot_date
+            FROM complete_snapshots c
+          ),
+          newer_rows AS (
+            SELECT
+              oc.snapshot_date AS to_snapshot_date,
+              oc.previous_snapshot_date AS from_snapshot_date,
+              oc.previous_id,
+              oc.source AS to_source,
+              oc.ranked_shops AS to_ranked_shops,
+              oc.detail_rows AS to_detail_rows,
+              r.shop_id,
+              previous.rank AS previous_rank,
+              r.rank AS current_rank,
+              COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name,
+              sh.slug,
+              COALESCE(NULLIF(sd.city, ''), '') AS city,
+              COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country,
+              sd.website,
+              sd.instagram
+            FROM ordered_complete oc
+            JOIN rankings r ON r.snapshot_id = oc.id
+            JOIN shops sh ON sh.id = r.shop_id
+            LEFT JOIN rankings previous ON previous.snapshot_id = oc.previous_id AND previous.shop_id = r.shop_id
+            LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+            WHERE oc.previous_id IS NOT NULL
+          ),
+          rank_changes AS (
+            SELECT
+              CASE WHEN SUBSTR(from_snapshot_date, 1, 4) != SUBSTR(to_snapshot_date, 1, 4) THEN 'annual rank change' ELSE 'rank change' END AS change_type,
+              from_snapshot_date,
+              to_snapshot_date,
+              previous_rank,
+              current_rank,
+              previous_rank - current_rank AS rank_change,
+              name,
+              slug,
+              city,
+              country,
+              website,
+              instagram
+            FROM newer_rows
+            WHERE previous_rank IS NOT NULL AND previous_rank != current_rank
+          ),
+          annual_observations AS (
+            SELECT
+              'annual observation' AS change_type,
+              from_snapshot_date,
+              to_snapshot_date,
+              previous_rank,
+              current_rank,
+              0 AS rank_change,
+              name,
+              slug,
+              city,
+              country,
+              website,
+              instagram
+            FROM newer_rows
+            WHERE previous_rank = current_rank
+              AND SUBSTR(from_snapshot_date, 1, 4) != SUBSTR(to_snapshot_date, 1, 4)
+          ),
+          observed_entries AS (
+            SELECT
+              'observed entry' AS change_type,
+              from_snapshot_date,
+              to_snapshot_date,
+              NULL AS previous_rank,
+              current_rank,
+              NULL AS rank_change,
+              name,
+              slug,
+              city,
+              country,
+              website,
+              instagram
+            FROM newer_rows
+            WHERE previous_rank IS NULL
+          ),
+          observed_exits AS (
+            SELECT
+              'observed exit' AS change_type,
+              oc.previous_snapshot_date AS from_snapshot_date,
+              oc.snapshot_date AS to_snapshot_date,
+              previous.rank AS previous_rank,
+              NULL AS current_rank,
+              NULL AS rank_change,
+              COALESCE(NULLIF(sd.name, ''), NULLIF(previous.name_on_page, ''), sh.slug) AS name,
+              sh.slug,
+              COALESCE(NULLIF(sd.city, ''), '') AS city,
+              COALESCE(NULLIF(sd.country, ''), NULLIF(previous.country_on_page, ''), 'Not listed') AS country,
+              sd.website,
+              sd.instagram
+            FROM ordered_complete oc
+            JOIN rankings previous ON previous.snapshot_id = oc.previous_id
+            JOIN shops sh ON sh.id = previous.shop_id
+            LEFT JOIN rankings current ON current.snapshot_id = oc.id AND current.shop_id = previous.shop_id
+            LEFT JOIN shop_details sd ON sd.shop_id = previous.shop_id AND sd.snapshot_id = previous.snapshot_id
+            WHERE oc.previous_id IS NOT NULL
+              AND current.shop_id IS NULL
+          ),
+          changes AS (
+            SELECT * FROM rank_changes
+            UNION ALL SELECT * FROM annual_observations
+            UNION ALL SELECT * FROM observed_entries
+            UNION ALL SELECT * FROM observed_exits
+          )
+          SELECT
+            change_type,
+            from_snapshot_date,
+            to_snapshot_date,
+            previous_rank,
+            current_rank,
+            rank_change,
+            name,
+            slug,
+            city,
+            country,
+            website,
+            instagram
+          FROM changes
+          WHERE (:change_type IS NULL OR :change_type = '' OR change_type = :change_type)
+            AND (:search IS NULL OR :search = '' OR LOWER(name) LIKE '%' || LOWER(:search) || '%' OR LOWER(slug) LIKE '%' || LOWER(:search) || '%')
+            AND (:country IS NULL OR :country = '' OR LOWER(country) LIKE '%' || LOWER(:country) || '%')
+            AND (change_type != 'annual observation' OR (:search IS NOT NULL AND :search != ''))
+          ORDER BY to_snapshot_date DESC, ABS(COALESCE(rank_change, 0)) DESC, name
+          LIMIT 200
+
+      annual_editions:
+        title: Inferred annual ranking editions
+        description: Show the annual editions inferred from complete captures. The first complete capture is the baseline; later editions are the first complete capture in a calendar year whose ranking differs from the previous complete capture. This is an automatic heuristic, not an official edition marker.
+        hide_sql: true
+        sql: |-
+          WITH snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          complete_snapshots AS (
+            SELECT * FROM snapshot_stats
+            WHERE ranked_shops = 100 AND distinct_ranks = 100 AND lowest_rank = 1 AND highest_rank = 100
+          ),
+          ordered_complete AS (
+            SELECT
+              c.*,
+              LAG(c.id) OVER (ORDER BY c.snapshot_date) AS previous_id,
+              LAG(c.snapshot_date) OVER (ORDER BY c.snapshot_date) AS previous_snapshot_date
+            FROM complete_snapshots c
+          ),
+          change_counts AS (
+            SELECT
+              oc.id,
+              oc.snapshot_date,
+              oc.wayback_timestamp,
+              oc.source,
+              oc.ranked_shops,
+              oc.detail_rows,
+              oc.previous_id,
+              oc.previous_snapshot_date,
+              SUM(CASE WHEN oc.previous_id IS NULL OR previous_rows.shop_id IS NULL OR previous_rows.rank != current_rows.rank THEN 1 ELSE 0 END) AS changed_rows
+            FROM ordered_complete oc
+            JOIN rankings current_rows ON current_rows.snapshot_id = oc.id
+            LEFT JOIN rankings previous_rows ON previous_rows.snapshot_id = oc.previous_id AND previous_rows.shop_id = current_rows.shop_id
+            GROUP BY oc.id, oc.snapshot_date, oc.wayback_timestamp, oc.source, oc.ranked_shops, oc.detail_rows, oc.previous_id, oc.previous_snapshot_date
+          ),
+          annual_candidates AS (
+            SELECT
+              cc.*,
+              SUBSTR(cc.snapshot_date, 1, 4) AS edition_year,
+              ROW_NUMBER() OVER (PARTITION BY SUBSTR(cc.snapshot_date, 1, 4) ORDER BY cc.snapshot_date) AS edition_position
+            FROM change_counts cc
+            WHERE cc.previous_id IS NULL OR cc.changed_rows > 0
+          )
+          SELECT
+            edition_year,
+            snapshot_date,
+            source,
+            wayback_timestamp,
+            ranked_shops,
+            detail_rows,
+            ROUND(100.0 * detail_rows / NULLIF(ranked_shops, 0), 1) AS detail_coverage_pct,
+            changed_rows AS changed_rows_from_previous_complete,
+            CASE WHEN previous_id IS NULL THEN 'initial complete capture' ELSE 'first complete capture in year with a ranking change' END AS inference
+          FROM annual_candidates
+          WHERE edition_position = 1
+          ORDER BY edition_year DESC
+
+      annual_rank_changes:
+        title: Annual rank changes
+        description: Compare two inferred annual editions. Leave both years blank to compare the latest inferred edition with its predecessor. Only complete 100-shop editions are used; rank changes are not monthly observations.
+        hide_sql: true
+        params:
+          - from_year
+          - to_year
+          - direction
+          - search
+          - country
+        sql: |-
+          WITH snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          complete_snapshots AS (
+            SELECT * FROM snapshot_stats
+            WHERE ranked_shops = 100 AND distinct_ranks = 100 AND lowest_rank = 1 AND highest_rank = 100
+          ),
+          ordered_complete AS (
+            SELECT c.*, LAG(c.id) OVER (ORDER BY c.snapshot_date) AS previous_id, LAG(c.snapshot_date) OVER (ORDER BY c.snapshot_date) AS previous_snapshot_date
+            FROM complete_snapshots c
+          ),
+          change_counts AS (
+            SELECT oc.id, oc.snapshot_date, oc.wayback_timestamp, oc.source, oc.ranked_shops, oc.detail_rows, oc.previous_id, oc.previous_snapshot_date, SUM(CASE WHEN oc.previous_id IS NULL OR previous_rows.shop_id IS NULL OR previous_rows.rank != current_rows.rank THEN 1 ELSE 0 END) AS changed_rows
+            FROM ordered_complete oc
+            JOIN rankings current_rows ON current_rows.snapshot_id = oc.id
+            LEFT JOIN rankings previous_rows ON previous_rows.snapshot_id = oc.previous_id AND previous_rows.shop_id = current_rows.shop_id
+            GROUP BY oc.id, oc.snapshot_date, oc.wayback_timestamp, oc.source, oc.ranked_shops, oc.detail_rows, oc.previous_id, oc.previous_snapshot_date
+          ),
+          annual_candidates AS (
+            SELECT cc.*, SUBSTR(cc.snapshot_date, 1, 4) AS edition_year, ROW_NUMBER() OVER (PARTITION BY SUBSTR(cc.snapshot_date, 1, 4) ORDER BY cc.snapshot_date) AS edition_position
+            FROM change_counts cc
+            WHERE cc.previous_id IS NULL OR cc.changed_rows > 0
+          ),
+          annual_editions AS (
+            SELECT * FROM annual_candidates WHERE edition_position = 1
+          ),
+          to_edition AS (
+            SELECT * FROM annual_editions
+            WHERE (:to_year IS NULL OR :to_year = '' OR edition_year = :to_year)
+            ORDER BY edition_year DESC
+            LIMIT 1
+          ),
+          from_edition AS (
+            SELECT * FROM annual_editions
+            WHERE ((:from_year IS NOT NULL AND :from_year != '' AND edition_year = :from_year) OR ((:from_year IS NULL OR :from_year = '') AND edition_year < (SELECT edition_year FROM to_edition)))
+            ORDER BY edition_year DESC
+            LIMIT 1
+          ),
+          from_rows AS (
+            SELECT r.shop_id, r.rank, sh.slug, COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name, COALESCE(NULLIF(sd.city, ''), '') AS city, COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country, sd.website, sd.instagram
+            FROM from_edition f JOIN rankings r ON r.snapshot_id = f.id JOIN shops sh ON sh.id = r.shop_id LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          ),
+          to_rows AS (
+            SELECT r.shop_id, r.rank, sh.slug, COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name, COALESCE(NULLIF(sd.city, ''), '') AS city, COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country, sd.website, sd.instagram
+            FROM to_edition t JOIN rankings r ON r.snapshot_id = t.id JOIN shops sh ON sh.id = r.shop_id LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          )
+          SELECT
+            (SELECT edition_year FROM from_edition) AS from_year,
+            (SELECT snapshot_date FROM from_edition) AS from_snapshot_date,
+            (SELECT edition_year FROM to_edition) AS to_year,
+            (SELECT snapshot_date FROM to_edition) AS to_snapshot_date,
+            from_rows.rank AS previous_rank,
+            to_rows.rank AS current_rank,
+            from_rows.rank - to_rows.rank AS rank_change,
+            CASE WHEN from_rows.rank > to_rows.rank THEN 'climbed' ELSE 'dropped' END AS direction,
+            to_rows.name,
+            to_rows.slug,
+            to_rows.city,
+            to_rows.country,
+            to_rows.website,
+            to_rows.instagram
+          FROM to_rows
+          JOIN from_rows ON from_rows.shop_id = to_rows.shop_id
+          WHERE from_rows.rank != to_rows.rank
+            AND (:direction IS NULL OR :direction = '' OR CASE WHEN from_rows.rank > to_rows.rank THEN 'climbed' ELSE 'dropped' END = LOWER(:direction))
+            AND (:search IS NULL OR :search = '' OR LOWER(to_rows.name) LIKE '%' || LOWER(:search) || '%' OR LOWER(to_rows.slug) LIKE '%' || LOWER(:search) || '%')
+            AND (:country IS NULL OR :country = '' OR LOWER(to_rows.country) LIKE '%' || LOWER(:country) || '%')
+          ORDER BY ABS(from_rows.rank - to_rows.rank) DESC, to_rows.name
+          LIMIT 100
+
+      annual_membership_changes:
+        title: Annual observed entries and exits
+        description: Compare membership between two inferred annual editions. Results are labelled observed entry and observed exit because the edition dates are inferred from ranking changes rather than supplied by the publisher.
+        hide_sql: true
+        params:
+          - from_year
+          - to_year
+          - change_type
+          - search
+          - country
+        sql: |-
+          WITH snapshot_stats AS (
+            SELECT
+              s.id,
+              s.snapshot_date,
+              s.wayback_timestamp,
+              CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source,
+              COUNT(r.id) AS ranked_shops,
+              COUNT(DISTINCT r.rank) AS distinct_ranks,
+              MIN(r.rank) AS lowest_rank,
+              MAX(r.rank) AS highest_rank,
+              COUNT(d.id) AS detail_rows
+            FROM snapshots s
+            LEFT JOIN rankings r ON r.snapshot_id = s.id
+            LEFT JOIN shop_details d ON d.snapshot_id = r.snapshot_id AND d.shop_id = r.shop_id
+            GROUP BY s.id
+          ),
+          complete_snapshots AS (
+            SELECT * FROM snapshot_stats
+            WHERE ranked_shops = 100 AND distinct_ranks = 100 AND lowest_rank = 1 AND highest_rank = 100
+          ),
+          ordered_complete AS (
+            SELECT c.*, LAG(c.id) OVER (ORDER BY c.snapshot_date) AS previous_id, LAG(c.snapshot_date) OVER (ORDER BY c.snapshot_date) AS previous_snapshot_date
+            FROM complete_snapshots c
+          ),
+          change_counts AS (
+            SELECT oc.id, oc.snapshot_date, oc.wayback_timestamp, oc.source, oc.ranked_shops, oc.detail_rows, oc.previous_id, oc.previous_snapshot_date, SUM(CASE WHEN oc.previous_id IS NULL OR previous_rows.shop_id IS NULL OR previous_rows.rank != current_rows.rank THEN 1 ELSE 0 END) AS changed_rows
+            FROM ordered_complete oc
+            JOIN rankings current_rows ON current_rows.snapshot_id = oc.id
+            LEFT JOIN rankings previous_rows ON previous_rows.snapshot_id = oc.previous_id AND previous_rows.shop_id = current_rows.shop_id
+            GROUP BY oc.id, oc.snapshot_date, oc.wayback_timestamp, oc.source, oc.ranked_shops, oc.detail_rows, oc.previous_id, oc.previous_snapshot_date
+          ),
+          annual_candidates AS (
+            SELECT cc.*, SUBSTR(cc.snapshot_date, 1, 4) AS edition_year, ROW_NUMBER() OVER (PARTITION BY SUBSTR(cc.snapshot_date, 1, 4) ORDER BY cc.snapshot_date) AS edition_position
+            FROM change_counts cc
+            WHERE cc.previous_id IS NULL OR cc.changed_rows > 0
+          ),
+          annual_editions AS (
+            SELECT * FROM annual_candidates WHERE edition_position = 1
+          ),
+          to_edition AS (
+            SELECT * FROM annual_editions WHERE (:to_year IS NULL OR :to_year = '' OR edition_year = :to_year) ORDER BY edition_year DESC LIMIT 1
+          ),
+          from_edition AS (
+            SELECT * FROM annual_editions WHERE ((:from_year IS NOT NULL AND :from_year != '' AND edition_year = :from_year) OR ((:from_year IS NULL OR :from_year = '') AND edition_year < (SELECT edition_year FROM to_edition))) ORDER BY edition_year DESC LIMIT 1
+          ),
+          from_rows AS (
+            SELECT r.shop_id, r.rank, sh.slug, COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name, COALESCE(NULLIF(sd.city, ''), '') AS city, COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country, sd.website, sd.instagram
+            FROM from_edition f JOIN rankings r ON r.snapshot_id = f.id JOIN shops sh ON sh.id = r.shop_id LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          ),
+          to_rows AS (
+            SELECT r.shop_id, r.rank, sh.slug, COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name, COALESCE(NULLIF(sd.city, ''), '') AS city, COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country, sd.website, sd.instagram
+            FROM to_edition t JOIN rankings r ON r.snapshot_id = t.id JOIN shops sh ON sh.id = r.shop_id LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          ),
+          membership_changes AS (
+            SELECT 'observed entry' AS change_type, current.shop_id, NULL AS previous_rank, current.rank AS current_rank, current.slug, current.name, current.city, current.country, current.website, current.instagram FROM to_rows current LEFT JOIN from_rows previous ON previous.shop_id = current.shop_id WHERE previous.shop_id IS NULL
+            UNION ALL
+            SELECT 'observed exit', previous.shop_id, previous.rank, NULL, previous.slug, previous.name, previous.city, previous.country, previous.website, previous.instagram FROM from_rows previous LEFT JOIN to_rows current ON current.shop_id = previous.shop_id WHERE current.shop_id IS NULL
+          )
+          SELECT
+            membership_changes.change_type,
+            (SELECT edition_year FROM from_edition) AS from_year,
+            (SELECT snapshot_date FROM from_edition) AS from_snapshot_date,
+            (SELECT edition_year FROM to_edition) AS to_year,
+            (SELECT snapshot_date FROM to_edition) AS to_snapshot_date,
+            membership_changes.previous_rank,
+            membership_changes.current_rank,
+            membership_changes.name,
+            membership_changes.slug,
+            membership_changes.city,
+            membership_changes.country,
+            membership_changes.website,
+            membership_changes.instagram
+          FROM membership_changes
+          WHERE (:change_type IS NULL OR :change_type = '' OR membership_changes.change_type = :change_type)
+            AND (:search IS NULL OR :search = '' OR LOWER(membership_changes.name) LIKE '%' || LOWER(:search) || '%' OR LOWER(membership_changes.slug) LIKE '%' || LOWER(:search) || '%')
+            AND (:country IS NULL OR :country = '' OR LOWER(membership_changes.country) LIKE '%' || LOWER(:country) || '%')
+          ORDER BY membership_changes.change_type, membership_changes.current_rank, membership_changes.previous_rank, membership_changes.name
+          LIMIT 100
+
+      country_summary:
+        title: Country summary for a capture
+        description: Count ranked shops by the country label supplied on the selected capture. Leave snapshot_date blank for the latest observation. Labels are preserved as published and are not geographically normalized.
+        hide_sql: true
+        params:
+          - snapshot_date
+        sql: |-
+          WITH target_snapshot AS (
+            SELECT s.id, s.snapshot_date, CASE WHEN s.wayback_timestamp IS NULL THEN 'live' ELSE 'Wayback archive' END AS source
+            FROM snapshots s
+            WHERE s.snapshot_date = COALESCE(NULLIF(:snapshot_date, ''), (SELECT MAX(snapshot_date) FROM snapshots))
+            LIMIT 1
+          ),
+          ranked AS (
+            SELECT
+              ts.snapshot_date,
+              ts.source,
+              r.rank,
+              COALESCE(NULLIF(sd.country, ''), NULLIF(r.country_on_page, ''), 'Not listed') AS country,
+              COALESCE(NULLIF(sd.name, ''), NULLIF(r.name_on_page, ''), sh.slug) AS name
+            FROM target_snapshot ts
+            JOIN rankings r ON r.snapshot_id = ts.id
+            JOIN shops sh ON sh.id = r.shop_id
+            LEFT JOIN shop_details sd ON sd.shop_id = r.shop_id AND sd.snapshot_id = r.snapshot_id
+          )
+          SELECT
+            snapshot_date,
+            source,
+            country,
+            COUNT(*) AS shop_count,
+            MIN(rank) AS best_rank,
+            ROUND(AVG(rank), 1) AS average_rank
+          FROM ranked
+          GROUP BY snapshot_date, source, country
+          ORDER BY shop_count DESC, best_rank ASC, country
+          LIMIT 100
+
+    tables:
+      snapshots:
+        description_html: One row per scrape or archive capture. <code>snapshot_date</code> identifies the observation date; it is not automatically an official annual edition.
+        sort_desc: snapshot_date
+        size: 25
+        sortable_columns:
+          - snapshot_date
+          - scraped_at
+        columns:
+          id: Internal identifier.
+          snapshot_date: Date of the captured observation.
+          list_page_url: URL used for the ranking page.
+          wayback_timestamp: Wayback timestamp for archive captures; blank for live scrapes.
+          scraped_at: Time when this row was written to the database.
+      shops:
+        description_html: Stable shop identities keyed by the URL-derived slug. Use the slug to open a shop history query.
+        sort: slug
+        size: 50
+        label_column: slug
+        sortable_columns:
+          - slug
+          - created_at
+        columns:
+          id: Internal identifier.
+          slug: Stable URL-derived shop identifier.
+          created_at: Time when the shop was first seen.
+      rankings:
+        description_html: Ranking rows observed on each captured list page. These rows preserve the list page even when the individual detail page could not be archived.
+        sort: rank
+        size: 100
+        facets:
+          - country_on_page
+        sortable_columns:
+          - rank
+          - snapshot_id
+          - country_on_page
+        columns:
+          id: Internal identifier.
+          snapshot_id: Observation containing this ranking row.
+          shop_id: Stable shop identity.
+          rank: Position in the captured top 100.
+          detail_page_url: Detail URL linked from the captured list page.
+          name_on_page: Shop name as shown on the captured list page.
+          country_on_page: Country label as shown on the captured list page.
+      shop_details:
+        description_html: Optional detail-page enrichment for a shop and observation. Historical archive captures may have no detail row or only partial fields.
+        sort_desc: snapshot_id
+        size: 50
+        facets:
+          - country
+          - city
+          - is_wayback
+        sortable_columns:
+          - name
+          - country
+          - city
+          - snapshot_id
+        columns:
+          id: Internal identifier.
+          shop_id: Stable shop identity.
+          snapshot_id: Observation containing these detail fields.
+          name: Name parsed from the detail page.
+          city: City parsed from the detail page.
+          country: Country label parsed from the detail page.
+          address: Address parsed from the detail page.
+          website: Website link parsed from the detail page.
+          instagram: Instagram link parsed from the detail page.
+          description: Description parsed from the detail page.
+          image_urls: JSON-encoded image URL list.
+          is_wayback: 1 for a Wayback detail page, 0 for a live detail page.

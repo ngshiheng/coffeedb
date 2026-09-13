@@ -83,6 +83,26 @@ Useful options:
 
 - `--fresh`: bypass the local HTTP cache
 
+### Datasette exploration
+
+The published Datasette database separates monthly observations from inferred annual editions:
+
+- monthly or ad hoc snapshots record the observed top 100 at a point in time
+- inferred annual editions are the first complete capture in a calendar year whose ranking differs from the previous complete capture
+
+Start with the canned queries in `data/metadata.yml`:
+
+- `current_top_100` for the latest observed ranking
+- `find_current_shop` to search by name, slug, city, or country
+- `shop_history` to search by café name or slug and see meaningful ranking history
+- `available_captures` to inspect ranking and detail-page coverage
+- `top_100_on_date` to browse one exact captured date
+- `changes_since_previous_check` for changed shops across complete observations; unchanged monthly checks are hidden
+- `annual_editions`, `annual_rank_changes`, and `annual_membership_changes` for the inferred annual series
+- `country_summary` for the publisher's country labels on one capture
+
+The annual queries are heuristic because the source site does not provide an edition field. Partial captures are excluded from comparison queries, and membership changes are labelled as observed entries or exits rather than definitive debuts or dropouts.
+
 ## Data sources and scraper assumptions
 
 The scraper is tied to the current HTML structure used by the site.

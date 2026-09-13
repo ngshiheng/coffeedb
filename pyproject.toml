@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["hypothesis>=6.142.0", "pytest>=8.3.5"]
+test = ["hypothesis>=6.142.0", "pytest>=8.3.5", "pyyaml>=6.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

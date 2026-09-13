@@ -32,7 +32,7 @@ scrape-historical:  ## scrape all Wayback Machine snapshots into $(DB_PATH).
 	@$(UV) run coffeedb scrape historical --db "$(DB_PATH)" $(FRESH_FLAG)
 
 .PHONY: datasette
-datasette:  ## run datasette with metadata.json for local development.
+datasette:  ## run datasette with metadata.yml for local development.
 	@if [ ! -f "$(DB_PATH)" ]; then echo "Database not found: $(DB_PATH)"; exit 1; fi
 	@if [ -z "$(DATASETTE)" ]; then echo "Datasette could not be found. See https://docs.datasette.io/en/stable/installation.html"; exit 2; fi
 	@PORT=8001; \
@@ -40,17 +40,17 @@ datasette:  ## run datasette with metadata.json for local development.
 	  PORT=$$((PORT+1)); \
 	done; \
 	echo "Starting datasette on port $$PORT"; \
-	$(DATASETTE) --root "$(DB_PATH)" --metadata data/metadata.json --port $$PORT
+	$(DATASETTE) --root "$(DB_PATH)" --metadata data/metadata.yml --port $$PORT
 
 ##@ Docker
 .PHONY: docker-build
 docker-build:  ## build dated and latest Datasette images.
 	@if [ ! -f "$(DB_PATH)" ]; then echo "Database not found: $(DB_PATH)" >&2; exit 1; fi
-	@if [ ! -f data/metadata.json ]; then echo "Datasette metadata not found: data/metadata.json" >&2; exit 1; fi
+	@if [ ! -f data/metadata.yml ]; then echo "Datasette metadata not found: data/metadata.yml" >&2; exit 1; fi
 	@if [ -z "$(DOCKER)" ]; then echo "Docker could not be found. See https://docs.docker.com/get-docker/" >&2; exit 2; fi
 	@if [ -z "$(DATASETTE)" ]; then echo "Datasette could not be found. See https://docs.datasette.io/en/stable/installation.html" >&2; exit 2; fi
-	$(DATASETTE) package "$(DB_PATH)" --extra-options '$(DATASETTE_EXTRA_OPTIONS)' --metadata data/metadata.json --install=datasette-block-robots --install=datasette-gzip --install=datasette-vega --tag "$(IMAGE_NAME):$(TAG_DATE)"
-	$(DATASETTE) package "$(DB_PATH)" --extra-options '$(DATASETTE_EXTRA_OPTIONS)' --metadata data/metadata.json --install=datasette-block-robots --install=datasette-gzip --install=datasette-vega --tag "$(IMAGE_NAME):latest"
+	$(DATASETTE) package "$(DB_PATH)" --extra-options '$(DATASETTE_EXTRA_OPTIONS)' --metadata data/metadata.yml --install=datasette-block-robots --install=datasette-gzip --install=datasette-vega --tag "$(IMAGE_NAME):$(TAG_DATE)"
+	$(DATASETTE) package "$(DB_PATH)" --extra-options '$(DATASETTE_EXTRA_OPTIONS)' --metadata data/metadata.yml --install=datasette-block-robots --install=datasette-gzip --install=datasette-vega --tag "$(IMAGE_NAME):latest"
 
 .PHONY: docker-push
 docker-push:  ## push dated and latest Datasette images to Docker Hub.
