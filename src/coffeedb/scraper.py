@@ -36,6 +36,8 @@ DETAIL_ROOT_SELECTOR = "div[data-elementor-type='single-post']"
 DETAIL_NAME_SELECTORS = (
     "h1.elementor-heading-title a::text",
     "h1.elementor-heading-title::text",
+    "h1.entry-title a::text",
+    "h1.entry-title::text",
 )
 CONTACT_SECTION_XPATH = (
     ".//h2[normalize-space()='Contact']/ancestor::div[contains(@class, 'e-parent')][1]"

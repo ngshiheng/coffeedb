@@ -1,6 +1,8 @@
 """Wayback Machine helpers for snapshot discovery and archived page fetches."""
 
+import logging
 import time
+from typing import Any, cast
 
 import backoff
 import httpx
@@ -19,9 +21,13 @@ CDX_STATUS_FILTER = "statuscode:200"
 CDX_COLLAPSE_BY_DAY = "timestamp:8"
 CDX_HEADER_ROWS = 1
 CDX_MAX_RETRIES = 3
+WAYBACK_FETCH_MAX_RETRIES = 3
+WAYBACK_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+WAYBACK_RETRY_FALLBACK_DELAY_SECONDS = 1.0
 WAYBACK_USER_AGENT = "coffeedb-scraper/1.0 (historical research)"
 
 _WAYBACK_HEADERS = {"User-Agent": WAYBACK_USER_AGENT}
+logger = logging.getLogger(__name__)
 
 
 def _fetch_json(
@@ -55,6 +61,72 @@ def _fetch_text(
 def _snapshot_date_from_timestamp(timestamp: str) -> str:
     """Convert a Wayback timestamp into a YYYY-MM-DD snapshot date."""
     return f"{timestamp[:4]}-{timestamp[4:6]}-{timestamp[6:8]}"
+
+
+def _wayback_status_code(exc: Exception) -> int | None:
+    """Return an HTTP status from a status error, when one is available."""
+    response = cast(httpx.Response | None, getattr(exc, "response", None))
+    return response.status_code if response is not None else None
+
+
+def _give_up_wayback_error(exc: Exception) -> bool:
+    """Stop retrying for permanent statuses or non-transport HTTP errors."""
+    status_code = _wayback_status_code(exc)
+    if status_code is not None:
+        return status_code not in WAYBACK_RETRYABLE_STATUS_CODES
+    return not isinstance(exc, httpx.TransportError)
+
+
+def _wayback_retry_delay(exc: Exception) -> float:
+    """Return a server-provided retry delay or a short local fallback."""
+    response = cast(httpx.Response | None, getattr(exc, "response", None))
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(float(retry_after), 0.0)
+            except ValueError:
+                pass
+    return WAYBACK_RETRY_FALLBACK_DELAY_SECONDS
+
+
+def _log_wayback_retry(details: dict[str, Any]) -> None:
+    """Log a retry with the error, attempt, delay, and replay URL."""
+    exc = details["exception"]
+    status_code = _wayback_status_code(exc)
+    error = f"status={status_code}" if status_code is not None else f"error={exc}"
+    args = details.get("args", ())
+    url = args[0] if args else "?"
+    logger.warning(
+        "Wayback fetch %s; retrying attempt=%s/%s after %.1fs url=%s",
+        error,
+        details["tries"] + 1,
+        WAYBACK_FETCH_MAX_RETRIES,
+        details["wait"],
+        url,
+    )
+
+
+@backoff.on_exception(
+    backoff.runtime,
+    (httpx.HTTPStatusError, httpx.TransportError),
+    max_tries=WAYBACK_FETCH_MAX_RETRIES,
+    giveup=_give_up_wayback_error,
+    jitter=None,
+    on_backoff=_log_wayback_retry,
+    logger=None,
+    value=_wayback_retry_delay,
+)
+def _fetch_archived_text(
+    url: str, *, use_cache: bool
+) -> tuple[str, bool]:
+    """Fetch one replay, retrying only transient Wayback HTTP failures."""
+    return _fetch_text(
+        url,
+        timeout=WAYBACK_HTTP_TIMEOUT_SECONDS,
+        headers=_WAYBACK_HEADERS,
+        use_cache=use_cache,
+    )
 
 
 class _EmptyCDXResponse(Exception):
@@ -126,14 +198,21 @@ def fetch_archived(
     """
     url = build_wayback_url(timestamp, target_url)
     from_cache = False
+    html = ""
     try:
-        html, from_cache = _fetch_text(
+        html, from_cache = _fetch_archived_text(url, use_cache=use_cache)
+        if not html.strip():
+            logger.warning("Wayback fetch returned an empty body url=%s", url)
+            html = None
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Wayback fetch failed status=%s url=%s",
+            exc.response.status_code,
             url,
-            timeout=WAYBACK_HTTP_TIMEOUT_SECONDS,
-            headers=_WAYBACK_HEADERS,
-            use_cache=use_cache,
         )
-    except httpx.HTTPError:
+        html = None
+    except httpx.HTTPError as exc:
+        logger.warning("Wayback fetch failed error=%s url=%s", exc, url)
         html = None
     finally:
         time.sleep(DEFAULT_WAYBACK_DELAY_SECONDS)

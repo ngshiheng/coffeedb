@@ -43,6 +43,19 @@ DETAIL_HTML = """
 """
 
 
+LEGACY_DETAIL_HTML = """
+<html>
+  <body>
+    <main class='site-main'>
+      <header class='page-header'>
+        <h1 class='entry-title'>Legacy Shop</h1>
+      </header>
+    </main>
+  </body>
+</html>
+"""
+
+
 def test_scrape_list_parses_rows_and_sorts_by_rank() -> None:
     rows = scrape_list("https://example.com/list", html=LIST_HTML)
 
@@ -67,3 +80,12 @@ def test_scrape_detail_extracts_core_fields() -> None:
         "https://example.com/img/a.jpg",
         "https://example.com/img/b.jpg",
     ]
+
+
+def test_scrape_detail_extracts_legacy_entry_title() -> None:
+    detail = scrape_detail(
+        "https://example.com/locales/legacy-shop/",
+        html=LEGACY_DETAIL_HTML,
+    )
+
+    assert detail["name"] == "Legacy Shop"
